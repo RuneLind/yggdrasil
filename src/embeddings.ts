@@ -1,18 +1,29 @@
 import { pipeline, type FeatureExtractionPipeline } from "@xenova/transformers";
 
-const MODEL = "Xenova/all-MiniLM-L6-v2";
+/**
+ * Embedding model configuration.
+ *
+ * EMBEDDING_MODEL: HuggingFace model ID (must be ONNX-compatible via @xenova/transformers)
+ * EMBEDDING_DIMS: vector dimensions (must match the model output and the DB column)
+ *
+ * Defaults to multilingual-e5-small (384 dims) which handles Norwegian identifiers
+ * and mixed-language code. For English-only codebases, all-MiniLM-L6-v2 is faster.
+ * For code-heavy search, consider jinaai/jina-embeddings-v2-base-code.
+ */
+export const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "Xenova/multilingual-e5-small";
+export const EMBEDDING_DIMS = parseInt(process.env.EMBEDDING_DIMS ?? "384", 10);
+
 let extractor: FeatureExtractionPipeline | null = null;
 
 async function getExtractor(): Promise<FeatureExtractionPipeline> {
   if (!extractor) {
-    extractor = await pipeline("feature-extraction", MODEL, {
+    extractor = await pipeline("feature-extraction", EMBEDDING_MODEL, {
       quantized: true,
     });
   }
   return extractor;
 }
 
-/** Generate a 384-dim embedding for the given text. Returns null on failure. */
 export async function generateEmbedding(
   text: string,
 ): Promise<number[] | null> {

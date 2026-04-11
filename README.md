@@ -130,6 +130,7 @@ The server exposes 6 tools over streamable HTTP on port 9130:
 | `impact` | Blast radius — what breaks if this symbol changes? | "If I change Behandling, what's affected?" |
 | `detect_changes` | Map a git diff to affected symbols + their blast radius | "What's the impact of this PR?" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
+| `read_source` | Read source code of an indexed file with line numbers | "Show me lines 30-60 of BehandlingService.java" |
 | `list_repos` | List all indexed repositories with metadata | "What repos are indexed?" |
 
 ### Search algorithm
@@ -190,8 +191,12 @@ Tested on the Melosys multi-repo stack:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://muninn:muninn@127.0.0.1:5435/muninn` | Postgres connection |
+| `DATABASE_URL` | `postgresql://user:password@127.0.0.1:5432/yggdrasil` | Postgres connection (requires pgvector) |
 | `YGGDRASIL_PORT` | `9130` | MCP server port |
+| `EMBEDDING_MODEL` | `Xenova/multilingual-e5-small` | HuggingFace model ID (ONNX-compatible) |
+| `EMBEDDING_DIMS` | `384` | Vector dimensions (must match model + DB column) |
+
+The default embedding model supports Norwegian and other non-English identifiers. For English-only codebases, `Xenova/all-MiniLM-L6-v2` is faster. For code-optimized search, try `jinaai/jina-embeddings-v2-base-code` (768 dims — requires a schema change).
 
 ### MCP client configuration
 
@@ -214,7 +219,7 @@ Add to your agent's `.mcp.json`:
 - **Language:** TypeScript
 - **Database:** PostgreSQL + pgvector
 - **Parsing:** web-tree-sitter (WASM grammars for Java, Kotlin, TypeScript)
-- **Embeddings:** Xenova/all-MiniLM-L6-v2 (384 dimensions)
+- **Embeddings:** Configurable (default: Xenova/multilingual-e5-small, 384 dims)
 - **Protocol:** MCP (streamable HTTP, stateful sessions)
 
 ## Project structure

@@ -10,7 +10,7 @@ Named after the Norse world tree connecting all realms — companion to [Muninn]
 - **Language:** TypeScript
 - **Database:** PostgreSQL + pgvector (tables prefixed `ci_`)
 - **Parsing:** web-tree-sitter (WASM — Java, Kotlin, TypeScript)
-- **Embeddings:** Xenova/all-MiniLM-L6-v2 (384 dims)
+- **Embeddings:** Configurable (default: Xenova/multilingual-e5-small, 384 dims)
 - **Protocol:** MCP (streamable-http)
 
 ## Running
@@ -56,7 +56,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 - Use `postgres` npm package for DB (not Bun.sql)
 - Use `web-tree-sitter` (WASM), not native `tree-sitter`
 - Database tables prefixed with `ci_` (code intelligence)
-- Embeddings: 384-dim, same model as Muninn for consistency
+- Embeddings: configurable model via EMBEDDING_MODEL env var (default 384-dim)
 - All timestamps as `TIMESTAMPTZ` in DB
 
 ## Database

@@ -43,11 +43,11 @@ export async function hybridSearch(
 
   // Run all three search strategies in parallel
   const ftsPromise = sql<{ id: string; rank: number }[]>`
-    SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('english', ${query})) as rank
+    SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('simple', ${query})) as rank
     FROM ci_symbols s
     JOIN ci_files f ON f.id = s.file_id
     JOIN ci_repos r ON r.id = f.repo_id
-    WHERE s.search_vector @@ plainto_tsquery('english', ${query})
+    WHERE s.search_vector @@ plainto_tsquery('simple', ${query})
     ${filters}
     ORDER BY rank DESC
     LIMIT ${candidateLimit}
