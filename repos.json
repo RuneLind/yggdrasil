@@ -1,0 +1,14 @@
+[
+  {
+    "name": "melosys-api",
+    "path": "/Users/rune/source/nav/melosys-api",
+    "languages": ["java", "kotlin"],
+    "exclude": ["**/build/**", "**/target/**", "**/generated/**"]
+  },
+  {
+    "name": "melosys-eessi",
+    "path": "/Users/rune/source/nav/melosys-eessi",
+    "languages": ["java", "kotlin"],
+    "exclude": ["**/build/**", "**/target/**", "**/generated/**"]
+  }
+]

@@ -1,0 +1,98 @@
+import { sql } from "./connection.ts";
+
+export interface CiEdge {
+  id: string;
+  source_id: string;
+  target_id: string;
+  kind: string;
+  line: number | null;
+}
+
+export interface EdgeInsert {
+  source_id: string;
+  target_id: string;
+  kind: string;
+  line?: number | null;
+}
+
+export async function insertEdgesBatch(edges: EdgeInsert[]): Promise<void> {
+  if (edges.length === 0) return;
+
+  await sql`
+    INSERT INTO ci_edges ${sql(
+      edges.map((e) => ({
+        source_id: e.source_id,
+        target_id: e.target_id,
+        kind: e.kind,
+        line: e.line ?? null,
+      })),
+      "source_id",
+      "target_id",
+      "kind",
+      "line",
+    )}
+    ON CONFLICT (source_id, target_id, kind, line) DO NOTHING
+  `;
+}
+
+/** Get all symbols that reference the given symbol (incoming edges) */
+export async function getIncomingEdges(
+  symbolId: string,
+): Promise<{ source_id: string; kind: string; name: string; qualified_name: string; file_path: string; repo_name: string }[]> {
+  return sql`
+    SELECT e.source_id, e.kind, s.name, s.qualified_name, f.path as file_path, r.name as repo_name
+    FROM ci_edges e
+    JOIN ci_symbols s ON s.id = e.source_id
+    JOIN ci_files f ON f.id = s.file_id
+    JOIN ci_repos r ON r.id = f.repo_id
+    WHERE e.target_id = ${symbolId}
+  `;
+}
+
+/** Get all symbols that the given symbol references (outgoing edges) */
+export async function getOutgoingEdges(
+  symbolId: string,
+): Promise<{ target_id: string; kind: string; name: string; qualified_name: string; file_path: string; repo_name: string }[]> {
+  return sql`
+    SELECT e.target_id, e.kind, s.name, s.qualified_name, f.path as file_path, r.name as repo_name
+    FROM ci_edges e
+    JOIN ci_symbols s ON s.id = e.target_id
+    JOIN ci_files f ON f.id = s.file_id
+    JOIN ci_repos r ON r.id = f.repo_id
+    WHERE e.source_id = ${symbolId}
+  `;
+}
+
+/** Blast radius — transitive closure of incoming edges up to maxDepth */
+export async function getImpact(
+  symbolId: string,
+  maxDepth = 3,
+): Promise<{ id: string; name: string; qualified_name: string; kind: string; file_path: string; repo_name: string; depth: number; edge_kind: string }[]> {
+  return sql`
+    WITH RECURSIVE impact AS (
+      SELECT
+        s.id, s.name, s.qualified_name, s.kind,
+        f.path as file_path, r.name as repo_name,
+        0 as depth, e.kind as edge_kind
+      FROM ci_edges e
+      JOIN ci_symbols s ON s.id = e.source_id
+      JOIN ci_files f ON f.id = s.file_id
+      JOIN ci_repos r ON r.id = f.repo_id
+      WHERE e.target_id = ${symbolId}
+
+      UNION
+
+      SELECT
+        s.id, s.name, s.qualified_name, s.kind,
+        f.path as file_path, r.name as repo_name,
+        i.depth + 1, e.kind as edge_kind
+      FROM ci_edges e
+      JOIN ci_symbols s ON s.id = e.source_id
+      JOIN ci_files f ON f.id = s.file_id
+      JOIN ci_repos r ON r.id = f.repo_id
+      JOIN impact i ON e.target_id = i.id
+      WHERE i.depth < ${maxDepth}
+    )
+    SELECT DISTINCT ON (id) * FROM impact ORDER BY id, depth
+  `;
+}
