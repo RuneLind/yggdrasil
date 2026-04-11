@@ -1,9 +1,13 @@
 import { walkRepo } from "./file-walker.ts";
 import { initParser, loadLanguage, parseSource, type SupportedLanguage } from "./parser.ts";
 import { extractSymbols, buildQualifiedNames, toSymbolInserts } from "./symbol-extractor.ts";
+import { extractCallGraph } from "./call-graph.ts";
+import { storeImports, resolveImports, deleteImportEdges } from "./import-resolver.ts";
+import { resolveAndStoreEdges } from "./edge-resolver.ts";
 import { upsertRepo, updateRepoCommit } from "../db/repos.ts";
 import { upsertFile, deleteFileData, deleteStaleFiles } from "../db/files.ts";
 import { insertSymbolsBatch, getRepoSymbolCount } from "../db/symbols.ts";
+import { sql } from "../db/connection.ts";
 import type { RepoConfig } from "../config.ts";
 
 export interface IndexResult {
@@ -11,6 +15,7 @@ export interface IndexResult {
   totalFiles: number;
   changedFiles: number;
   totalSymbols: number;
+  totalEdges: number;
   durationMs: number;
 }
 
@@ -20,32 +25,40 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
 
   console.log(`[yggdrasil] Indexing ${config.name} at ${config.path}...`);
 
-  // 1. Initialize parser
   await initParser();
 
-  // 2. Upsert repo record
   const repo = await upsertRepo(config.name, config.path);
 
-  // 3. Discover files
+  // Pre-load languages
+  const requestedLangs = (config.languages ?? ["java", "kotlin", "typescript", "tsx"]) as SupportedLanguage[];
+  await Promise.all(requestedLangs.map(loadLanguage));
+
   const files = await walkRepo(config.path, {
-    languages: config.languages as SupportedLanguage[],
+    languages: requestedLangs,
     exclude: config.exclude,
   });
 
   console.log(`[yggdrasil] Found ${files.length} source files`);
 
-  // 4. Remove stale files (deleted from repo since last index)
   const currentPaths = files.map((f) => f.relativePath);
   const staleCount = await deleteStaleFiles(repo.id, currentPaths);
   if (staleCount > 0) {
     console.log(`[yggdrasil] Removed ${staleCount} stale files`);
   }
 
-  // 5. Process each file
+  // ── Phase 1: Extract symbols and imports ──
   let changedFiles = 0;
 
+  // Collect per-file extraction data for Phase 2 edge resolution
+  const fileExtractions: {
+    fileId: string;
+    extraction: ReturnType<typeof extractSymbols>;
+    callGraph: ReturnType<typeof extractCallGraph>;
+    symbolDbIds: string[];
+    qualifiedNames: string[];
+  }[] = [];
+
   for (const file of files) {
-    // Upsert file — returns whether content changed
     const { id: fileId, changed } = await upsertFile(
       repo.id,
       file.relativePath,
@@ -56,36 +69,80 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
     if (!changed) continue;
     changedFiles++;
 
-    // Clear old symbols for this file
     await deleteFileData(fileId);
 
-    // Load language + parse
     const language = await loadLanguage(file.language);
     const source = await Bun.file(file.absolutePath).text();
     const tree = parseSource(source, language);
 
     try {
-      // Extract symbols
-      const result = extractSymbols(source, tree, file.language, language);
-      const qualifiedNames = buildQualifiedNames(result);
+      const extraction = extractSymbols(source, tree, file.language, language);
+      const qualifiedNames = buildQualifiedNames(extraction);
 
-      // Insert symbols (first pass — without parent IDs)
+      // Insert symbols
       const inserts = toSymbolInserts(
-        result,
+        extraction,
         fileId,
         qualifiedNames,
-        result.symbols.map(() => null), // parent IDs resolved in a separate pass
+        extraction.symbols.map(() => null),
       );
 
+      let symbolDbIds: string[] = [];
       if (inserts.length > 0) {
-        await insertSymbolsBatch(inserts);
+        symbolDbIds = await insertSymbolsBatch(inserts);
       }
+
+      // Store raw imports for later resolution
+      if (extraction.imports.length > 0) {
+        await storeImports(fileId, extraction.imports);
+      }
+
+      // Extract call graph (calls + inheritance)
+      const callGraph = extractCallGraph(source, tree, file.language, extraction);
+
+      fileExtractions.push({
+        fileId,
+        extraction,
+        callGraph,
+        symbolDbIds,
+        qualifiedNames,
+      });
     } finally {
       tree.delete();
     }
   }
 
-  // 6. Update repo commit
+  // ── Phase 2: Resolve edges (imports, calls, inheritance) ──
+  let totalEdges = 0;
+
+  if (changedFiles > 0) {
+    // Delete old import edges and re-resolve
+    await deleteImportEdges(repo.id);
+    const importEdges = await resolveImports(repo.id);
+    totalEdges += importEdges;
+    if (importEdges > 0) {
+      console.log(`[yggdrasil] Resolved ${importEdges} import edges`);
+    }
+
+    // Resolve calls and inheritance per file
+    for (const fe of fileExtractions) {
+      if (fe.callGraph.calls.length === 0 && fe.callGraph.inheritance.length === 0) continue;
+      const edgeCount = await resolveAndStoreEdges(
+        fe.fileId,
+        repo.id,
+        fe.extraction,
+        fe.callGraph,
+        fe.symbolDbIds,
+        fe.qualifiedNames,
+      );
+      totalEdges += edgeCount;
+    }
+
+    if (totalEdges > 0) {
+      console.log(`[yggdrasil] Created ${totalEdges} total edges`);
+    }
+  }
+
   const headCommit = await getHeadCommit(config.path);
   if (headCommit) {
     await updateRepoCommit(repo.id, headCommit);
@@ -95,7 +152,7 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
   const durationMs = Math.round(performance.now() - start);
 
   console.log(
-    `[yggdrasil] Indexed ${config.name}: ${changedFiles}/${files.length} files changed, ${totalSymbols} symbols, ${durationMs}ms`,
+    `[yggdrasil] Indexed ${config.name}: ${changedFiles}/${files.length} files changed, ${totalSymbols} symbols, ${totalEdges} edges, ${durationMs}ms`,
   );
 
   return {
@@ -103,6 +160,7 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
     totalFiles: files.length,
     changedFiles,
     totalSymbols,
+    totalEdges,
     durationMs,
   };
 }
