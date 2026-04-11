@@ -10,7 +10,7 @@ import { listRepos } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
 
 const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
-const TOOL_COUNT = 6;
+const TOOL_COUNT = 7;
 
 function jsonResponse(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -20,6 +20,7 @@ function textResponse(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
+function createServer(): McpServer {
 const server = new McpServer({
   name: "yggdrasil",
   version: "0.1.0",
@@ -136,30 +137,86 @@ server.tool(
 );
 
 server.tool(
+  "read_source",
+  "Read the source code of an indexed file. Use after search/impact to inspect the actual code.",
+  {
+    repo: z.string().describe("Repository name"),
+    path: z.string().describe("File path relative to repo root"),
+    start_line: z.number().optional().describe("Start line (1-based, default: beginning)"),
+    end_line: z.number().optional().describe("End line (1-based, default: end of file)"),
+  },
+  async ({ repo: repoName, path: filePath, start_line, end_line }) => {
+    const [repoRow] = await sql<{ path: string }[]>`
+      SELECT path FROM ci_repos WHERE name = ${repoName}
+    `;
+    if (!repoRow) return textResponse(`Repository not found: ${repoName}`);
+
+    const fullPath = `${repoRow.path}/${filePath}`;
+    const file = Bun.file(fullPath);
+    if (!await file.exists()) return textResponse(`File not found: ${fullPath}`);
+
+    const source = await file.text();
+    const lines = source.split("\n");
+
+    const start = Math.max(1, start_line ?? 1);
+    const end = Math.min(lines.length, end_line ?? lines.length);
+    const slice = lines.slice(start - 1, end);
+
+    // Return with line numbers for easy reference
+    const numbered = slice.map((line, i) => `${start + i}: ${line}`).join("\n");
+    return textResponse(numbered);
+  },
+);
+
+server.tool(
   "list_repos",
   "List all indexed repositories with their stats",
   {},
   async () => jsonResponse(await listRepos()),
 );
 
-// --- Start server ---
-const transport = new WebStandardStreamableHTTPServerTransport({
-  sessionIdGenerator: () => crypto.randomUUID(),
-});
+return server;
+}
 
-await server.connect(transport);
+// --- Start server ---
+// Create a new McpServer + transport per session so multiple clients can connect
+const sessions = new Map<string, WebStandardStreamableHTTPServerTransport>();
 
 Bun.serve({
   port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname === "/mcp") {
-      return transport.handleRequest(req);
-    }
+
     if (url.pathname === "/health") {
       return Response.json({ status: "ok", tools: TOOL_COUNT });
     }
-    return new Response("Not found", { status: 404 });
+
+    if (url.pathname !== "/mcp") {
+      return new Response("Not found", { status: 404 });
+    }
+
+    // Check for existing session
+    const sessionId = req.headers.get("mcp-session-id");
+    if (sessionId && sessions.has(sessionId)) {
+      return sessions.get(sessionId)!.handleRequest(req);
+    }
+
+    // New session: create fresh server + transport
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      onsessioninitialized: (id) => {
+        sessions.set(id, transport);
+      },
+    });
+
+    transport.onclose = () => {
+      if (transport.sessionId) sessions.delete(transport.sessionId);
+    };
+
+    const server = createServer();
+    await server.connect(transport);
+
+    return transport.handleRequest(req);
   },
 });
 

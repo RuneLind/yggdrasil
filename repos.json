@@ -10,5 +10,17 @@
     "path": "/Users/rune/source/nav/melosys-eessi",
     "languages": ["java", "kotlin"],
     "exclude": ["**/build/**", "**/target/**", "**/generated/**"]
+  },
+  {
+    "name": "melosys-trygdeavgift-beregning",
+    "path": "/Users/rune/source/nav/melosys-trygdeavgift-beregning",
+    "languages": ["java", "kotlin"],
+    "exclude": ["**/build/**", "**/target/**", "**/generated/**"]
+  },
+  {
+    "name": "melosys-web",
+    "path": "/Users/rune/source/nav/melosys-web",
+    "languages": ["typescript", "tsx"],
+    "exclude": ["**/node_modules/**", "**/dist/**", "**/.next/**", "**/build/**"]
   }
 ]
