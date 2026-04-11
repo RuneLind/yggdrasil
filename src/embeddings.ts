@@ -26,7 +26,18 @@ export async function generateEmbedding(
   }
 }
 
-/** Pre-load the embedding model. */
 export async function warmupEmbeddings(): Promise<void> {
   await getExtractor();
+}
+
+/** Build the text used for embedding a symbol — keeps embedding input consistent. */
+export function symbolEmbeddingText(sym: {
+  qualified_name: string;
+  signature: string | null;
+  doc_comment: string | null;
+}): string {
+  const parts = [sym.qualified_name];
+  if (sym.signature) parts.push(sym.signature);
+  if (sym.doc_comment) parts.push(sym.doc_comment);
+  return parts.join(" ");
 }

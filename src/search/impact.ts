@@ -10,7 +10,6 @@ export interface ImpactResult {
     repo_name: string;
   };
   affected: ImpactEntry[];
-  totalAffected: number;
 }
 
 export interface ImpactEntry {
@@ -72,6 +71,5 @@ export async function analyzeImpact(
       repo_name: target.repo_name,
     },
     affected,
-    totalAffected: affected.length,
   };
 }

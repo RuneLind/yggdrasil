@@ -80,14 +80,17 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
   return rows.map((r) => r.id);
 }
 
+export function toVectorLiteral(v: number[]): string {
+  return `[${v.join(",")}]`;
+}
+
 export async function updateSymbolEmbedding(
   id: string,
   embedding: number[],
 ): Promise<void> {
-  const embeddingStr = `[${embedding.join(",")}]`;
   await sql.unsafe(
     `UPDATE ci_symbols SET embedding = $1::vector WHERE id = $2`,
-    [embeddingStr, id],
+    [toVectorLiteral(embedding), id],
   );
 }
 
@@ -106,21 +109,14 @@ export async function findSymbolByQualifiedName(
   qualifiedName: string,
   repoName?: string,
 ): Promise<(CiSymbol & { file_path: string; repo_name: string })[]> {
-  if (repoName) {
-    return sql`
-      SELECT s.*, f.path as file_path, r.name as repo_name
-      FROM ci_symbols s
-      JOIN ci_files f ON f.id = s.file_id
-      JOIN ci_repos r ON r.id = f.repo_id
-      WHERE s.qualified_name = ${qualifiedName} AND r.name = ${repoName}
-    `;
-  }
+  const repoFilter = repoName ? sql`AND r.name = ${repoName}` : sql``;
   return sql`
     SELECT s.*, f.path as file_path, r.name as repo_name
     FROM ci_symbols s
     JOIN ci_files f ON f.id = s.file_id
     JOIN ci_repos r ON r.id = f.repo_id
     WHERE s.qualified_name = ${qualifiedName}
+    ${repoFilter}
   `;
 }
 

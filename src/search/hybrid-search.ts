@@ -1,5 +1,6 @@
 import { sql } from "../db/connection.ts";
 import { generateEmbedding } from "../embeddings.ts";
+import { toVectorLiteral } from "../db/symbols.ts";
 
 export interface SearchResult {
   id: string;
@@ -32,7 +33,7 @@ export async function hybridSearch(
 
   // Generate embedding for semantic search
   const embedding = await generateEmbedding(query);
-  const embeddingStr = embedding ? `[${embedding.join(",")}]` : null;
+  const embeddingStr = embedding ? toVectorLiteral(embedding) : null;
 
   // Build optional filters
   const repoFilter = options?.repo ? sql`AND r.name = ${options.repo}` : sql``;
@@ -40,8 +41,8 @@ export async function hybridSearch(
   const langFilter = options?.language ? sql`AND f.language = ${options.language}` : sql``;
   const filters = sql`${repoFilter} ${kindFilter} ${langFilter}`;
 
-  // 1. Full-text search ranked results
-  const ftsResults = await sql<{ id: string; rank: number }[]>`
+  // Run all three search strategies in parallel
+  const ftsPromise = sql<{ id: string; rank: number }[]>`
     SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('english', ${query})) as rank
     FROM ci_symbols s
     JOIN ci_files f ON f.id = s.file_id
@@ -52,30 +53,20 @@ export async function hybridSearch(
     LIMIT ${candidateLimit}
   `;
 
-  // 2. Semantic search (if embedding available)
-  let semanticResults: { id: string; rank: number }[] = [];
-  if (embeddingStr) {
-    semanticResults = await sql.unsafe(
-      `SELECT s.id, 1 - (s.embedding <=> $1::vector) as rank
-       FROM ci_symbols s
-       JOIN ci_files f ON f.id = s.file_id
-       JOIN ci_repos r ON r.id = f.repo_id
-       WHERE s.embedding IS NOT NULL
-       ${options?.repo ? `AND r.name = $2` : ""}
-       ${options?.kind ? `AND s.kind = $${options?.repo ? 3 : 2}` : ""}
-       ORDER BY s.embedding <=> $1::vector
-       LIMIT $${1 + (options?.repo ? 1 : 0) + (options?.kind ? 1 : 0) + 1}`,
-      [
-        embeddingStr,
-        ...(options?.repo ? [options.repo] : []),
-        ...(options?.kind ? [options.kind] : []),
-        candidateLimit,
-      ],
-    );
-  }
+  const semanticPromise = embeddingStr
+    ? sql<{ id: string; rank: number }[]>`
+        SELECT s.id, 1 - (s.embedding <=> ${embeddingStr}::vector) as rank
+        FROM ci_symbols s
+        JOIN ci_files f ON f.id = s.file_id
+        JOIN ci_repos r ON r.id = f.repo_id
+        WHERE s.embedding IS NOT NULL
+        ${filters}
+        ORDER BY s.embedding <=> ${embeddingStr}::vector
+        LIMIT ${candidateLimit}
+      `
+    : Promise.resolve([] as { id: string; rank: number }[]);
 
-  // 3. Name similarity — exact match > prefix > qualified name substring
-  const nameResults = await sql<{ id: string; rank: number }[]>`
+  const namePromise = sql<{ id: string; rank: number }[]>`
     SELECT s.id,
       CASE
         WHEN s.name = ${query} THEN 1.0
@@ -95,6 +86,10 @@ export async function hybridSearch(
     ORDER BY rank DESC, s.kind ASC
     LIMIT ${candidateLimit}
   `;
+
+  const [ftsResults, semanticResults, nameResults] = await Promise.all([
+    ftsPromise, semanticPromise, namePromise,
+  ]);
 
   // 4. RRF merge
   const K = 60; // RRF constant

@@ -90,6 +90,11 @@ export async function detectChanges(
   const changedSymbols: ChangedSymbol[] = [];
 
   for (const [filePath, lines] of changedLines) {
+    let minLine = Infinity, maxLine = -Infinity;
+    for (const l of lines) {
+      if (l < minLine) minLine = l;
+      if (l > maxLine) maxLine = l;
+    }
     const symbols = await sql<ChangedSymbol[]>`
       SELECT s.name, s.qualified_name, s.kind, f.path as file_path
       FROM ci_symbols s
@@ -97,10 +102,8 @@ export async function detectChanges(
       JOIN ci_repos r ON r.id = f.repo_id
       WHERE r.name = ${repoName}
         AND f.path = ${filePath}
-        AND (
-          s.start_line <= ${Math.max(...lines)} AND
-          s.end_line >= ${Math.min(...lines)}
-        )
+        AND s.start_line <= ${maxLine}
+        AND s.end_line >= ${minLine}
     `;
     changedSymbols.push(...symbols);
   }

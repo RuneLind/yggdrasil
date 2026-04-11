@@ -2,7 +2,7 @@
  * Batch generate embeddings for all symbols that don't have one yet.
  */
 import { getSymbolsWithoutEmbeddings, updateSymbolEmbedding } from "../src/db/symbols.ts";
-import { generateEmbedding, warmupEmbeddings } from "../src/embeddings.ts";
+import { generateEmbedding, warmupEmbeddings, symbolEmbeddingText } from "../src/embeddings.ts";
 import { closeDb } from "../src/db/connection.ts";
 
 const BATCH_SIZE = 50;
@@ -20,13 +20,7 @@ async function main() {
     if (batch.length === 0) break;
 
     for (const sym of batch) {
-      // Build embedding input: qualified_name + signature + doc_comment
-      const parts = [sym.qualified_name];
-      if (sym.signature) parts.push(sym.signature);
-      if (sym.doc_comment) parts.push(sym.doc_comment);
-      const text = parts.join(" ");
-
-      const embedding = await generateEmbedding(text);
+      const embedding = await generateEmbedding(symbolEmbeddingText(sym));
       if (embedding) {
         await updateSymbolEmbedding(sym.id, embedding);
         totalProcessed++;

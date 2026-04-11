@@ -2,7 +2,7 @@ import { walkRepo } from "./file-walker.ts";
 import { initParser, loadLanguage, parseSource, type SupportedLanguage } from "./parser.ts";
 import { extractSymbols, buildQualifiedNames, toSymbolInserts } from "./symbol-extractor.ts";
 import { upsertRepo, updateRepoCommit } from "../db/repos.ts";
-import { upsertFile, deleteFileSymbols, deleteStaleFiles } from "../db/files.ts";
+import { upsertFile, deleteFileData, deleteStaleFiles } from "../db/files.ts";
 import { insertSymbolsBatch, getRepoSymbolCount } from "../db/symbols.ts";
 import type { RepoConfig } from "../config.ts";
 
@@ -57,7 +57,7 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
     changedFiles++;
 
     // Clear old symbols for this file
-    await deleteFileSymbols(fileId);
+    await deleteFileData(fileId);
 
     // Load language + parse
     const language = await loadLanguage(file.language);

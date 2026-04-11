@@ -1,6 +1,6 @@
 import { Glob } from "bun";
-import { extname, relative, join } from "path";
-import { extensionToLanguage, type SupportedLanguage } from "./parser.ts";
+import { relative } from "path";
+import { EXTENSION_MAP, extensionToLanguage, type SupportedLanguage } from "./parser.ts";
 
 export interface DiscoveredFile {
   absolutePath: string;
@@ -20,7 +20,6 @@ const DEFAULT_EXCLUDE = [
   "**/.idea/**",
 ];
 
-/** Walk a repo directory and discover indexable source files. */
 export async function walkRepo(
   repoPath: string,
   options?: {
@@ -30,23 +29,18 @@ export async function walkRepo(
 ): Promise<DiscoveredFile[]> {
   const allowedLangs = new Set(options?.languages ?? ["java", "kotlin", "typescript", "tsx"]);
   const excludePatterns = options?.exclude ?? DEFAULT_EXCLUDE;
+  const compiledExcludes = excludePatterns.map((p) => new Glob(p));
 
-  const extensions = [".java", ".kt", ".ts", ".tsx"];
   const files: DiscoveredFile[] = [];
 
-  for (const ext of extensions) {
+  for (const ext of Object.keys(EXTENSION_MAP)) {
     const lang = extensionToLanguage(ext);
     if (!lang || !allowedLangs.has(lang)) continue;
 
     const glob = new Glob(`**/*${ext}`);
     for await (const match of glob.scan({ cwd: repoPath, absolute: true })) {
       const relativePath = relative(repoPath, match);
-
-      // Check exclude patterns
-      if (excludePatterns.some((p) => matchGlob(relativePath, p))) continue;
-
-      // Skip test files for now (configurable later)
-      // We still index them — tests are useful for impact analysis
+      if (compiledExcludes.some((g) => g.match(relativePath))) continue;
 
       const content = await Bun.file(match).text();
       const contentHash = Bun.hash(content).toString(16);
@@ -61,15 +55,4 @@ export async function walkRepo(
   }
 
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-}
-
-/** Simple glob matcher for exclude patterns. */
-function matchGlob(path: string, pattern: string): boolean {
-  // Convert glob to regex
-  const regex = pattern
-    .replace(/\*\*/g, "<<<GLOBSTAR>>>")
-    .replace(/\*/g, "[^/]*")
-    .replace(/<<<GLOBSTAR>>>/g, ".*")
-    .replace(/\?/g, ".");
-  return new RegExp(`^${regex}$`).test(path);
 }

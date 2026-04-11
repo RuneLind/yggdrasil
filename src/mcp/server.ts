@@ -10,13 +10,21 @@ import { listRepos } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
 
 const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
+const TOOL_COUNT = 6;
+
+function jsonResponse(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function textResponse(text: string) {
+  return { content: [{ type: "text" as const, text }] };
+}
 
 const server = new McpServer({
   name: "yggdrasil",
   version: "0.1.0",
 });
 
-// --- Tool: search ---
 server.tool(
   "search",
   "Search for code symbols across indexed repositories using hybrid text + semantic search",
@@ -28,19 +36,10 @@ server.tool(
     limit: z.number().optional().describe("Max results (default 10)"),
   },
   async ({ query, repo, kind, language, limit }) => {
-    const results = await hybridSearch(query, { repo, kind, language, limit });
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(results, null, 2),
-        },
-      ],
-    };
+    return jsonResponse(await hybridSearch(query, { repo, kind, language, limit }));
   },
 );
 
-// --- Tool: symbol_context ---
 server.tool(
   "symbol_context",
   "Get full context for a symbol: callers, callees, inheritance, file location",
@@ -51,7 +50,7 @@ server.tool(
   async ({ qualified_name, repo }) => {
     const symbols = await findSymbolByQualifiedName(qualified_name, repo);
     if (symbols.length === 0) {
-      return { content: [{ type: "text" as const, text: `No symbol found matching: ${qualified_name}` }] };
+      return textResponse(`No symbol found matching: ${qualified_name}`);
     }
 
     const target = symbols[0];
@@ -60,7 +59,7 @@ server.tool(
       getOutgoingEdges(target.id),
     ]);
 
-    const context = {
+    return jsonResponse({
       symbol: {
         name: target.name,
         qualified_name: target.qualified_name,
@@ -76,13 +75,10 @@ server.tool(
       implements: outgoing.filter((e) => e.kind === "implements"),
       extended_by: incoming.filter((e) => e.kind === "extends"),
       implemented_by: incoming.filter((e) => e.kind === "implements"),
-    };
-
-    return { content: [{ type: "text" as const, text: JSON.stringify(context, null, 2) }] };
+    });
   },
 );
 
-// --- Tool: impact ---
 server.tool(
   "impact",
   "Analyze blast radius: what code is transitively affected if this symbol changes?",
@@ -93,14 +89,11 @@ server.tool(
   },
   async ({ qualified_name, repo, max_depth }) => {
     const result = await analyzeImpact(qualified_name, { repo, maxDepth: max_depth });
-    if (!result) {
-      return { content: [{ type: "text" as const, text: `No symbol found matching: ${qualified_name}` }] };
-    }
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    if (!result) return textResponse(`No symbol found matching: ${qualified_name}`);
+    return jsonResponse(result);
   },
 );
 
-// --- Tool: detect_changes ---
 server.tool(
   "detect_changes",
   "Given a git diff or commit range, identify which symbols changed and what is affected",
@@ -110,14 +103,11 @@ server.tool(
   },
   async ({ repo, ref }) => {
     const result = await detectChanges(repo, ref);
-    if (!result) {
-      return { content: [{ type: "text" as const, text: `Repository not found: ${repo}` }] };
-    }
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    if (!result) return textResponse(`Repository not found: ${repo}`);
+    return jsonResponse(result);
   },
 );
 
-// --- Tool: file_outline ---
 server.tool(
   "file_outline",
   "List all symbols in a file with their hierarchy, signatures, and line numbers",
@@ -131,14 +121,9 @@ server.tool(
       JOIN ci_repos r ON r.id = f.repo_id
       WHERE r.name = ${repoName} AND f.path = ${filePath}
     `;
-
-    if (!file) {
-      return { content: [{ type: "text" as const, text: `File not found: ${repoName}/${filePath}` }] };
-    }
+    if (!file) return textResponse(`File not found: ${repoName}/${filePath}`);
 
     const symbols = await getSymbolsByFile(file.id);
-
-    // Build tree structure
     const tree = symbols
       .filter((s) => !s.parent_id)
       .map((parent) => ({
@@ -146,23 +131,18 @@ server.tool(
         children: symbols.filter((s) => s.parent_id === parent.id),
       }));
 
-    return { content: [{ type: "text" as const, text: JSON.stringify(tree, null, 2) }] };
+    return jsonResponse(tree);
   },
 );
 
-// --- Tool: list_repos ---
 server.tool(
   "list_repos",
   "List all indexed repositories with their stats",
   {},
-  async () => {
-    const repos = await listRepos();
-    return { content: [{ type: "text" as const, text: JSON.stringify(repos, null, 2) }] };
-  },
+  async () => jsonResponse(await listRepos()),
 );
 
 // --- Start server ---
-// Use stateful mode so the transport can be reused across requests
 const transport = new WebStandardStreamableHTTPServerTransport({
   sessionIdGenerator: () => crypto.randomUUID(),
 });
@@ -177,9 +157,7 @@ Bun.serve({
       return transport.handleRequest(req);
     }
     if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok", tools: 5 }), {
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ status: "ok", tools: TOOL_COUNT });
     }
     return new Response("Not found", { status: 404 });
   },

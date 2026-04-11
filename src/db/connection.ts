@@ -9,6 +9,6 @@ export const sql = postgres(DATABASE_URL, {
   connect_timeout: 10,
 });
 
-export async function closeDb(): Promise<void> {
+export async function closeDb() {
   await sql.end();
 }

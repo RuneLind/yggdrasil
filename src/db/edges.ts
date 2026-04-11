@@ -35,7 +35,6 @@ export async function insertEdgesBatch(edges: EdgeInsert[]): Promise<void> {
   `;
 }
 
-/** Get all symbols that reference the given symbol (incoming edges) */
 export async function getIncomingEdges(
   symbolId: string,
 ): Promise<{ source_id: string; kind: string; name: string; qualified_name: string; file_path: string; repo_name: string }[]> {
@@ -49,7 +48,6 @@ export async function getIncomingEdges(
   `;
 }
 
-/** Get all symbols that the given symbol references (outgoing edges) */
 export async function getOutgoingEdges(
   symbolId: string,
 ): Promise<{ target_id: string; kind: string; name: string; qualified_name: string; file_path: string; repo_name: string }[]> {

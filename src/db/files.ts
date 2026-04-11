@@ -38,10 +38,12 @@ export async function upsertFile(
   return { id: row.id, changed: true };
 }
 
-export async function deleteFileSymbols(fileId: string): Promise<void> {
-  // Cascade deletes edges via FK
-  await sql`DELETE FROM ci_symbols WHERE file_id = ${fileId}`;
-  await sql`DELETE FROM ci_import_map WHERE file_id = ${fileId}`;
+export async function deleteFileData(fileId: string): Promise<void> {
+  // ci_symbols cascade-deletes ci_edges via FK; import_map needs explicit delete
+  await Promise.all([
+    sql`DELETE FROM ci_symbols WHERE file_id = ${fileId}`,
+    sql`DELETE FROM ci_import_map WHERE file_id = ${fileId}`,
+  ]);
 }
 
 export async function getFilesByRepo(repoId: string): Promise<CiFile[]> {

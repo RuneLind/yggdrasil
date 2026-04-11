@@ -2,7 +2,21 @@ import { Query, type Language } from "web-tree-sitter";
 import type { SupportedLanguage } from "./parser.ts";
 import type { SymbolInsert } from "../db/symbols.ts";
 
-/** Tree-sitter query patterns per language for symbol extraction. */
+export type SymbolKind = "class" | "interface" | "enum" | "method" | "function" |
+  "constructor" | "object" | "field" | "property" | "type" | "unknown";
+
+const CONTAINER_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum", "object"]);
+
+const TS_QUERY = `
+    (import_statement) @import
+    (class_declaration name: (type_identifier) @name) @class
+    (interface_declaration name: (type_identifier) @name) @interface
+    (function_declaration name: (identifier) @name) @function
+    (method_definition name: (property_identifier) @name) @method
+    (type_alias_declaration name: (type_identifier) @name) @type_alias
+    (enum_declaration name: (identifier) @name) @enum
+`;
+
 const QUERIES: Record<SupportedLanguage, string> = {
   java: `
     (package_declaration) @package
@@ -22,24 +36,8 @@ const QUERIES: Record<SupportedLanguage, string> = {
     (function_declaration name: (identifier) @name) @function
     (property_declaration (variable_declaration (identifier) @name)) @property
   `,
-  typescript: `
-    (import_statement) @import
-    (class_declaration name: (type_identifier) @name) @class
-    (interface_declaration name: (type_identifier) @name) @interface
-    (function_declaration name: (identifier) @name) @function
-    (method_definition name: (property_identifier) @name) @method
-    (type_alias_declaration name: (type_identifier) @name) @type_alias
-    (enum_declaration name: (identifier) @name) @enum
-  `,
-  tsx: `
-    (import_statement) @import
-    (class_declaration name: (type_identifier) @name) @class
-    (interface_declaration name: (type_identifier) @name) @interface
-    (function_declaration name: (identifier) @name) @function
-    (method_definition name: (property_identifier) @name) @method
-    (type_alias_declaration name: (type_identifier) @name) @type_alias
-    (enum_declaration name: (identifier) @name) @enum
-  `,
+  typescript: TS_QUERY,
+  tsx: TS_QUERY,
 };
 
 const queryCache: Partial<Record<SupportedLanguage, Query>> = {};
@@ -130,7 +128,7 @@ export function extractSymbols(
 
     // Symbol declarations
     if (patternNode && nameNode) {
-      const kind = getSymbolKind(match, lang);
+      const kind = getSymbolKind(match);
       const signature = extractSignature(source, patternNode);
       const docComment = extractDocComment(source, patternNode);
       const visibility = extractVisibility(patternNode, lang);
@@ -144,7 +142,7 @@ export function extractSymbols(
         signature,
         docComment,
         visibility,
-        isStatic: checkStatic(patternNode, lang),
+        isStatic: checkStatic(patternNode),
         parentIndex: null, // resolved in a second pass
       });
     }
@@ -157,8 +155,7 @@ export function extractSymbols(
       if (i === j) continue;
       const candidate = symbols[j];
       if (
-        (candidate.kind === "class" || candidate.kind === "interface" ||
-          candidate.kind === "enum" || candidate.kind === "object") &&
+        CONTAINER_KINDS.has(candidate.kind) &&
         sym.startLine >= candidate.startLine &&
         sym.endLine <= candidate.endLine
       ) {
@@ -177,23 +174,16 @@ export function extractSymbols(
   return { packageName, symbols, imports };
 }
 
-function getSymbolKind(
-  match: ReturnType<Query["matches"]>[0],
-  _lang: SupportedLanguage,
-): string {
+const CAPTURE_TO_KIND: Record<string, SymbolKind> = {
+  class: "class", interface: "interface", enum: "enum",
+  method: "method", function: "function", constructor: "constructor",
+  object: "object", field: "field", property: "property", type_alias: "type",
+};
+
+function getSymbolKind(match: ReturnType<Query["matches"]>[0]): SymbolKind {
   for (const capture of match.captures) {
-    switch (capture.name) {
-      case "class": return "class";
-      case "interface": return "interface";
-      case "enum": return "enum";
-      case "method": return "method";
-      case "function": return "function";
-      case "constructor": return "constructor";
-      case "object": return "object";
-      case "field": return "field";
-      case "property": return "property";
-      case "type_alias": return "type";
-    }
+    const kind = CAPTURE_TO_KIND[capture.name];
+    if (kind) return kind;
   }
   return "unknown";
 }
@@ -249,11 +239,13 @@ function extractVisibility(
   return null;
 }
 
-function checkStatic(
-  node: import("web-tree-sitter").SyntaxNode,
-  _lang: SupportedLanguage,
-): boolean {
-  return (node.text ?? "").includes("static ");
+function checkStatic(node: import("web-tree-sitter").SyntaxNode): boolean {
+  // Check modifiers child for "static" to avoid false positives from method bodies
+  const modifiers = node.namedChildren?.find((c: any) => c.type === "modifiers");
+  if (modifiers) return (modifiers.text ?? "").includes("static");
+  // Fallback: check the first line of the declaration text
+  const firstLine = (node.text ?? "").split("\n")[0];
+  return /\bstatic\b/.test(firstLine);
 }
 
 /** Build qualified names from extraction result and a package name. */
