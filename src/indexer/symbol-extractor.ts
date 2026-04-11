@@ -1,11 +1,12 @@
 import { Query, type Language } from "web-tree-sitter";
 import type { SupportedLanguage } from "./parser.ts";
 import type { SymbolInsert } from "../db/symbols.ts";
+import { nodeText, findNamedChild } from "./ast-utils.ts";
 
 export type SymbolKind = "class" | "interface" | "enum" | "method" | "function" |
   "constructor" | "object" | "field" | "property" | "type" | "unknown";
 
-const CONTAINER_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum", "object"]);
+export const CONTAINER_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum", "object"]);
 
 const TS_QUERY = `
     (import_statement) @import
@@ -104,7 +105,7 @@ export function extractSymbols(
     // Package declarations
     if (captures.has("package")) {
       const pkgNode = captures.get("package")!;
-      const pkgText = pkgNode.text ?? source.slice(pkgNode.startIndex, pkgNode.endIndex);
+      const pkgText = nodeText(pkgNode, source);
       packageName = pkgText
         .replace(/^package\s+/, "")
         .replace(/;?\s*$/, "")
@@ -115,7 +116,7 @@ export function extractSymbols(
     // Import declarations
     if (captures.has("import")) {
       const impNode = captures.get("import")!;
-      const importText = impNode.text ?? source.slice(impNode.startIndex, impNode.endIndex);
+      const importText = nodeText(impNode, source);
       const isWildcard = importText.includes(".*") || importText.includes("* as");
       const importPath = importText
         .replace(/^import\s+(static\s+)?/, "")
@@ -132,7 +133,7 @@ export function extractSymbols(
       const signature = extractSignature(source, patternNode);
       const docComment = extractDocComment(source, patternNode);
       const visibility = extractVisibility(patternNode, lang);
-      const name = nameNode.text ?? source.slice(nameNode.startIndex, nameNode.endIndex);
+      const name = nodeText(nameNode, source);
 
       symbols.push({
         name,
@@ -191,7 +192,7 @@ function getSymbolKind(match: ReturnType<Query["matches"]>[0]): SymbolKind {
 function extractSignature(source: string, node: import("web-tree-sitter").SyntaxNode): string | null {
   // Get text from start of node to first { or = (declaration without body)
   // Use source substring as fallback — some tree-sitter WASM builds don't populate .text reliably
-  const text = node.text ?? source.slice(node.startIndex, node.endIndex);
+  const text = nodeText(node, source);
   if (!text) return null;
   const braceIdx = text.indexOf("{");
   const sig = braceIdx >= 0 ? text.slice(0, braceIdx).trim() : text.split("\n")[0].trim();
@@ -205,7 +206,7 @@ function extractDocComment(
   // Look for a comment node immediately before this node
   const prev = node.previousNamedSibling;
   if (prev && (prev.type === "comment" || prev.type === "block_comment" || prev.type === "multiline_comment")) {
-    const text = prev.text ?? source.slice(prev.startIndex, prev.endIndex);
+    const text = nodeText(prev, source);
     if (text && (text.startsWith("/**") || text.startsWith("///"))) {
       return text
         .replace(/^\/\*\*\s*/, "")
@@ -228,7 +229,7 @@ function extractVisibility(
   if (lang === "kotlin" && text.startsWith("internal ")) return "internal";
   // Kotlin: check modifiers child
   if (lang === "kotlin") {
-    const modifiers = node.childForFieldName?.("modifiers") ?? node.namedChildren?.find((c: any) => c.type === "modifiers");
+    const modifiers = node.childForFieldName?.("modifiers") ?? findNamedChild(node, "modifiers");
     if (modifiers) {
       const modText = modifiers.text ?? "";
       if (modText.includes("private")) return "private";
@@ -240,8 +241,7 @@ function extractVisibility(
 }
 
 function checkStatic(node: import("web-tree-sitter").SyntaxNode): boolean {
-  // Check modifiers child for "static" to avoid false positives from method bodies
-  const modifiers = node.namedChildren?.find((c: any) => c.type === "modifiers");
+  const modifiers = findNamedChild(node, "modifiers");
   if (modifiers) return (modifiers.text ?? "").includes("static");
   // Fallback: check the first line of the declaration text
   const firstLine = (node.text ?? "").split("\n")[0];

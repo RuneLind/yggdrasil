@@ -1,5 +1,5 @@
 import { sql } from "../db/connection.ts";
-import { insertEdgesBatch, type EdgeInsert } from "../db/edges.ts";
+import { insertEdgesInBatches, type EdgeInsert } from "../db/edges.ts";
 import type { ExtractedImport } from "./symbol-extractor.ts";
 
 /** Store raw imports for a file in ci_import_map. */
@@ -103,11 +103,7 @@ export async function resolveImports(repoId: string): Promise<number> {
   const allEdges = [...exactEdges, ...wildcardEdges];
 
   if (allEdges.length > 0) {
-    // Insert in batches to avoid overwhelming Postgres
-    const BATCH_SIZE = 500;
-    for (let i = 0; i < allEdges.length; i += BATCH_SIZE) {
-      await insertEdgesBatch(allEdges.slice(i, i + BATCH_SIZE));
-    }
+    await insertEdgesInBatches(allEdges);
   }
 
   return allEdges.length;
@@ -116,13 +112,12 @@ export async function resolveImports(repoId: string): Promise<number> {
 /** Delete all import edges for a repo (before re-resolving). */
 export async function deleteImportEdges(repoId: string): Promise<number> {
   const result = await sql`
-    DELETE FROM ci_edges
-    WHERE kind = 'imports'
-      AND source_id IN (
-        SELECT s.id FROM ci_symbols s
-        JOIN ci_files f ON f.id = s.file_id
-        WHERE f.repo_id = ${repoId}
-      )
+    DELETE FROM ci_edges e
+    USING ci_symbols s, ci_files f
+    WHERE e.source_id = s.id
+      AND s.file_id = f.id
+      AND f.repo_id = ${repoId}
+      AND e.kind = 'imports'
   `;
   return result.count;
 }

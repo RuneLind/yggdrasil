@@ -1,17 +1,19 @@
 import { sql } from "./connection.ts";
 
+export type EdgeKind = "calls" | "extends" | "implements" | "imports";
+
 export interface CiEdge {
   id: string;
   source_id: string;
   target_id: string;
-  kind: string;
+  kind: EdgeKind;
   line: number | null;
 }
 
 export interface EdgeInsert {
   source_id: string;
   target_id: string;
-  kind: string;
+  kind: EdgeKind;
   line?: number | null;
 }
 
@@ -33,6 +35,12 @@ export async function insertEdgesBatch(edges: EdgeInsert[]): Promise<void> {
     )}
     ON CONFLICT (source_id, target_id, kind, line) DO NOTHING
   `;
+}
+
+export async function insertEdgesInBatches(edges: EdgeInsert[], batchSize = 500): Promise<void> {
+  for (let i = 0; i < edges.length; i += batchSize) {
+    await insertEdgesBatch(edges.slice(i, i + batchSize));
+  }
 }
 
 export async function getIncomingEdges(

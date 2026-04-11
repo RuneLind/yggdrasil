@@ -29,9 +29,10 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
 
   const repo = await upsertRepo(config.name, config.path);
 
-  // Pre-load languages
+  // Pre-load languages into a Map for sync lookup in the file loop
   const requestedLangs = (config.languages ?? ["java", "kotlin", "typescript", "tsx"]) as SupportedLanguage[];
-  await Promise.all(requestedLangs.map(loadLanguage));
+  const langMap = new Map<string, Awaited<ReturnType<typeof loadLanguage>>>();
+  await Promise.all(requestedLangs.map(async (l) => langMap.set(l, await loadLanguage(l))));
 
   const files = await walkRepo(config.path, {
     languages: requestedLangs,
@@ -71,7 +72,7 @@ export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
 
     await deleteFileData(fileId);
 
-    const language = await loadLanguage(file.language);
+    const language = langMap.get(file.language)!;
     const source = await Bun.file(file.absolutePath).text();
     const tree = parseSource(source, language);
 
