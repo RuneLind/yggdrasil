@@ -3,28 +3,30 @@ import { hybridSearch } from "./search/hybrid-search.ts";
 import { loadRepoConfigs, repoConfigFromArgs } from "./config.ts";
 import { closeDb } from "./db/connection.ts";
 
-const command = process.argv[2];
+const args = process.argv.slice(2);
+const command = args[0];
+const flags = new Set(args.filter((a) => a.startsWith("--")));
+const positional = args.slice(1).filter((a) => !a.startsWith("--"));
 
 async function main() {
   switch (command) {
     case "index": {
-      const target = process.argv[3];
+      const target = positional[0];
+      const full = flags.has("--full");
       if (!target) {
-        // Index all repos from repos.json
         const configs = await loadRepoConfigs();
         if (configs.length === 0) {
-          console.error("Usage: bun run src/cli.ts index <repo-path>");
+          console.error("Usage: bun run src/cli.ts index [--full] <repo-path>");
           console.error("  or create a repos.json with repo configurations");
           process.exit(1);
         }
         for (const config of configs) {
-          await indexRepo(config);
+          await indexRepo(config, { full });
         }
       } else {
-        // Index a single repo by path
-        const name = process.argv[4]; // optional name override
+        const name = positional[1];
         const config = repoConfigFromArgs(target, name);
-        await indexRepo(config);
+        await indexRepo(config, { full });
       }
       break;
     }
@@ -51,9 +53,9 @@ async function main() {
       console.log("Yggdrasil — Code Intelligence Engine");
       console.log("");
       console.log("Commands:");
-      console.log("  index <repo-path> [name]   Index a codebase");
-      console.log("  index                      Index all repos from repos.json");
-      console.log("  search <query>             Search indexed symbols");
+      console.log("  index [--full] <repo-path> [name]  Index a codebase (--full forces re-index)");
+      console.log("  index [--full]                     Index all repos from repos.json");
+      console.log("  search <query>                     Search indexed symbols");
       console.log("");
       console.log("MCP server:");
       console.log("  bun run start              Start MCP server (port 9130)");

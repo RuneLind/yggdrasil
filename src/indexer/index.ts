@@ -19,15 +19,30 @@ export interface IndexResult {
   durationMs: number;
 }
 
+export interface IndexOptions {
+  /** Force full re-index: drop all existing data for this repo before indexing. */
+  full?: boolean;
+}
+
 /** Index a repository — full or incremental based on content hashes. */
-export async function indexRepo(config: RepoConfig): Promise<IndexResult> {
+export async function indexRepo(
+  config: RepoConfig,
+  options: IndexOptions = {},
+): Promise<IndexResult> {
   const start = performance.now();
 
-  console.log(`[yggdrasil] Indexing ${config.name} at ${config.path}...`);
+  console.log(
+    `[yggdrasil] ${options.full ? "Full re-indexing" : "Indexing"} ${config.name} at ${config.path}...`,
+  );
 
   await initParser();
 
   const repo = await upsertRepo(config.name, config.path);
+
+  if (options.full) {
+    const deleted = await sql`DELETE FROM ci_files WHERE repo_id = ${repo.id}`;
+    console.log(`[yggdrasil] Dropped ${deleted.count} existing files (cascades to symbols + edges)`);
+  }
 
   // Pre-load languages into a Map for sync lookup in the file loop
   const requestedLangs = (config.languages ?? ["java", "kotlin", "typescript", "tsx"]) as SupportedLanguage[];
