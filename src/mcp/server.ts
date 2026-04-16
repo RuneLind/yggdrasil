@@ -10,7 +10,17 @@ import { listRepos } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
 
 const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
-const TOOL_COUNT = 7;
+
+/** Convert a simple glob pattern to SQL LIKE: * → %, ? → _, ** → % */
+function globToLike(glob: string): string {
+  return glob
+    .replace(/%/g, "\\%")   // escape existing SQL wildcards
+    .replace(/_/g, "\\_")
+    .replace(/\*\*/g, "%")  // ** matches any path depth
+    .replace(/\*/g, "%")    // * matches within a segment
+    .replace(/\?/g, "_");   // ? matches single char
+}
+const TOOL_COUNT = 9;
 
 function jsonResponse(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -173,6 +183,197 @@ server.tool(
   "List all indexed repositories with their stats",
   {},
   async () => jsonResponse(await listRepos()),
+);
+
+server.tool(
+  "search_pattern",
+  "Search for a text or regex pattern across indexed source files. Use for finding usage patterns like .last(), @OneToMany, BigDecimal.ZERO that symbol-based search misses.",
+  {
+    pattern: z.string().describe("Text or regex pattern to search for"),
+    repo: z.string().optional().describe("Filter to a specific repository (default: all indexed repos)"),
+    path_glob: z.string().optional().describe("Filter files by glob pattern (e.g. '*.kt', 'src/main/**')"),
+    max_results: z.number().optional().describe("Max matches to return (default 20)"),
+    context_lines: z.number().optional().describe("Lines of context before/after each match (default 2)"),
+  },
+  async ({ pattern, repo, path_glob, max_results = 20, context_lines = 2 }) => {
+    // Get repo paths to search
+    let repos: { name: string; path: string }[];
+    if (repo) {
+      const [r] = await sql<{ name: string; path: string }[]>`
+        SELECT name, path FROM ci_repos WHERE name = ${repo}
+      `;
+      if (!r) return textResponse(`Repository not found: ${repo}`);
+      repos = [r];
+    } else {
+      repos = await sql<{ name: string; path: string }[]>`
+        SELECT name, path FROM ci_repos ORDER BY name
+      `;
+    }
+    if (repos.length === 0) return textResponse("No indexed repositories found");
+
+    const args = [
+      "--json",
+      "-C", String(context_lines),
+      "--max-count", String(max_results * 2), // per-file cap, we trim total later
+    ];
+    if (path_glob) {
+      args.push("--glob", path_glob);
+    }
+    args.push(pattern, ...repos.map(r => r.path));
+
+    const proc = Bun.spawn(["rg", ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+
+    // Exit code 1 = no matches (not an error)
+    if (proc.exitCode !== 0 && proc.exitCode !== 1) {
+      return textResponse(`ripgrep error (exit ${proc.exitCode}): ${stderr.trim()}`);
+    }
+
+    // Parse ripgrep JSON lines
+    const matches: {
+      repo: string;
+      path: string;
+      line: number;
+      content: string;
+      context_before: string[];
+      context_after: string[];
+    }[] = [];
+
+    // Build repo-path-to-name lookup
+    const pathToRepo = new Map(repos.map(r => [r.path, r.name]));
+
+    // Collect context lines for current match
+    let pendingContext: string[] = [];
+    let currentMatch: typeof matches[0] | null = null;
+
+    for (const line of stdout.split("\n")) {
+      if (!line.trim()) continue;
+      let msg: any;
+      try { msg = JSON.parse(line); } catch { continue; }
+
+      if (msg.type === "context") {
+        const text = msg.data?.lines?.text?.trimEnd() ?? "";
+        if (currentMatch) {
+          currentMatch.context_after.push(text);
+        } else {
+          pendingContext.push(text);
+        }
+      } else if (msg.type === "match") {
+        // Flush previous match
+        if (currentMatch) {
+          matches.push(currentMatch);
+          if (matches.length >= max_results) break;
+        }
+
+        const filePath: string = msg.data?.path?.text ?? "";
+        const repoName = Array.from(pathToRepo.entries()).find(
+          ([rp]) => filePath.startsWith(rp)
+        );
+        const relPath = repoName ? filePath.slice(repoName[0].length + 1) : filePath;
+
+        currentMatch = {
+          repo: repoName?.[1] ?? "unknown",
+          path: relPath,
+          line: msg.data?.line_number ?? 0,
+          content: (msg.data?.lines?.text ?? "").trimEnd(),
+          context_before: [...pendingContext],
+          context_after: [],
+        };
+        pendingContext = [];
+      } else if (msg.type === "end" || msg.type === "begin") {
+        // Flush on file boundary
+        if (currentMatch) {
+          matches.push(currentMatch);
+          if (matches.length >= max_results) break;
+          currentMatch = null;
+        }
+        pendingContext = [];
+      }
+    }
+    // Flush last match
+    if (currentMatch && matches.length < max_results) {
+      matches.push(currentMatch);
+    }
+
+    if (matches.length === 0) {
+      return textResponse(`No matches found for pattern: ${pattern}`);
+    }
+
+    return jsonResponse({
+      pattern,
+      total_matches: matches.length,
+      matches,
+    });
+  },
+);
+
+server.tool(
+  "list_files",
+  "List files in an indexed repository, optionally filtered by directory and glob pattern.",
+  {
+    repo: z.string().describe("Repository name"),
+    path: z.string().optional().describe("Directory path within repo (default: root)"),
+    pattern: z.string().optional().describe("Glob filter (e.g. '*.kt', '**/*Test*')"),
+  },
+  async ({ repo: repoName, path: dirPath, pattern: globPattern }) => {
+    // Build query conditions
+    let files: { path: string; language: string; indexed_at: Date }[];
+
+    if (dirPath && globPattern) {
+      // SQL LIKE for directory prefix + glob conversion for pattern
+      const dirPrefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
+      const likePattern = globToLike(globPattern);
+      files = await sql<typeof files>`
+        SELECT f.path, f.language, f.indexed_at
+        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
+        WHERE r.name = ${repoName}
+          AND f.path LIKE ${dirPrefix + '%'}
+          AND f.path LIKE ${likePattern}
+        ORDER BY f.path
+      `;
+    } else if (dirPath) {
+      const dirPrefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
+      files = await sql<typeof files>`
+        SELECT f.path, f.language, f.indexed_at
+        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
+        WHERE r.name = ${repoName}
+          AND f.path LIKE ${dirPrefix + '%'}
+        ORDER BY f.path
+      `;
+    } else if (globPattern) {
+      const likePattern = globToLike(globPattern);
+      files = await sql<typeof files>`
+        SELECT f.path, f.language, f.indexed_at
+        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
+        WHERE r.name = ${repoName}
+          AND f.path LIKE ${likePattern}
+        ORDER BY f.path
+      `;
+    } else {
+      files = await sql<typeof files>`
+        SELECT f.path, f.language, f.indexed_at
+        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
+        WHERE r.name = ${repoName}
+        ORDER BY f.path
+      `;
+    }
+
+    if (files.length === 0) {
+      return textResponse(`No files found in repo "${repoName}" with the given filters`);
+    }
+
+    return jsonResponse({
+      repo: repoName,
+      total_files: files.length,
+      files: files.map(f => ({ path: f.path, language: f.language })),
+    });
+  },
 );
 
 return server;
