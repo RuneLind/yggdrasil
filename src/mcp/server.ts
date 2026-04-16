@@ -6,7 +6,7 @@ import { analyzeImpact } from "../search/impact.ts";
 import { detectChanges } from "../search/detect-changes.ts";
 import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
-import { listRepos } from "../db/repos.ts";
+import { getRepo, listRepos } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
 
 const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
@@ -196,18 +196,13 @@ server.tool(
     context_lines: z.number().optional().describe("Lines of context before/after each match (default 2)"),
   },
   async ({ pattern, repo, path_glob, max_results = 20, context_lines = 2 }) => {
-    // Get repo paths to search
     let repos: { name: string; path: string }[];
     if (repo) {
-      const [r] = await sql<{ name: string; path: string }[]>`
-        SELECT name, path FROM ci_repos WHERE name = ${repo}
-      `;
+      const r = await getRepo(repo);
       if (!r) return textResponse(`Repository not found: ${repo}`);
       repos = [r];
     } else {
-      repos = await sql<{ name: string; path: string }[]>`
-        SELECT name, path FROM ci_repos ORDER BY name
-      `;
+      repos = await listRepos();
     }
     if (repos.length === 0) return textResponse("No indexed repositories found");
 
@@ -226,8 +221,10 @@ server.tool(
       stderr: "pipe",
     });
 
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
     await proc.exited;
 
     // Exit code 1 = no matches (not an error)
@@ -245,10 +242,11 @@ server.tool(
       context_after: string[];
     }[] = [];
 
-    // Build repo-path-to-name lookup
-    const pathToRepo = new Map(repos.map(r => [r.path, r.name]));
+    // Pre-sort by path length descending for correct longest-prefix match
+    const repoPaths = repos
+      .map(r => [r.path, r.name] as const)
+      .sort((a, b) => b[0].length - a[0].length);
 
-    // Collect context lines for current match
     let pendingContext: string[] = [];
     let currentMatch: typeof matches[0] | null = null;
 
@@ -272,13 +270,11 @@ server.tool(
         }
 
         const filePath: string = msg.data?.path?.text ?? "";
-        const repoName = Array.from(pathToRepo.entries()).find(
-          ([rp]) => filePath.startsWith(rp)
-        );
-        const relPath = repoName ? filePath.slice(repoName[0].length + 1) : filePath;
+        const repoEntry = repoPaths.find(([rp]) => filePath.startsWith(rp));
+        const relPath = repoEntry ? filePath.slice(repoEntry[0].length + 1) : filePath;
 
         currentMatch = {
-          repo: repoName?.[1] ?? "unknown",
+          repo: repoEntry?.[1] ?? "unknown",
           path: relPath,
           line: msg.data?.line_number ?? 0,
           content: (msg.data?.lines?.text ?? "").trimEnd(),
@@ -320,49 +316,23 @@ server.tool(
     repo: z.string().describe("Repository name"),
     path: z.string().optional().describe("Directory path within repo (default: root)"),
     pattern: z.string().optional().describe("Glob filter (e.g. '*.kt', '**/*Test*')"),
+    limit: z.number().optional().describe("Max files to return (default 200)"),
   },
-  async ({ repo: repoName, path: dirPath, pattern: globPattern }) => {
-    // Build query conditions
-    let files: { path: string; language: string; indexed_at: Date }[];
+  async ({ repo: repoName, path: dirPath, pattern: globPattern, limit = 200 }) => {
+    const dirFilter = dirPath
+      ? sql`AND f.path LIKE ${(dirPath.endsWith("/") ? dirPath : dirPath + "/") + '%'}`
+      : sql``;
+    const globFilter = globPattern
+      ? sql`AND f.path LIKE ${globToLike(globPattern)}`
+      : sql``;
 
-    if (dirPath && globPattern) {
-      // SQL LIKE for directory prefix + glob conversion for pattern
-      const dirPrefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
-      const likePattern = globToLike(globPattern);
-      files = await sql<typeof files>`
-        SELECT f.path, f.language, f.indexed_at
-        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
-        WHERE r.name = ${repoName}
-          AND f.path LIKE ${dirPrefix + '%'}
-          AND f.path LIKE ${likePattern}
-        ORDER BY f.path
-      `;
-    } else if (dirPath) {
-      const dirPrefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
-      files = await sql<typeof files>`
-        SELECT f.path, f.language, f.indexed_at
-        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
-        WHERE r.name = ${repoName}
-          AND f.path LIKE ${dirPrefix + '%'}
-        ORDER BY f.path
-      `;
-    } else if (globPattern) {
-      const likePattern = globToLike(globPattern);
-      files = await sql<typeof files>`
-        SELECT f.path, f.language, f.indexed_at
-        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
-        WHERE r.name = ${repoName}
-          AND f.path LIKE ${likePattern}
-        ORDER BY f.path
-      `;
-    } else {
-      files = await sql<typeof files>`
-        SELECT f.path, f.language, f.indexed_at
-        FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
-        WHERE r.name = ${repoName}
-        ORDER BY f.path
-      `;
-    }
+    const files = await sql<{ path: string; language: string }[]>`
+      SELECT f.path, f.language
+      FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id
+      WHERE r.name = ${repoName} ${dirFilter} ${globFilter}
+      ORDER BY f.path
+      LIMIT ${limit}
+    `;
 
     if (files.length === 0) {
       return textResponse(`No files found in repo "${repoName}" with the given filters`);
@@ -371,7 +341,8 @@ server.tool(
     return jsonResponse({
       repo: repoName,
       total_files: files.length,
-      files: files.map(f => ({ path: f.path, language: f.language })),
+      truncated: files.length === limit,
+      files,
     });
   },
 );
