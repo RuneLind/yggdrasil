@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yggdrasil — Code Intelligence Engine</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            line-height: 1.6;
+        }
+
+        .hero {
+            text-align: center;
+            padding: 60px 20px 40px;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a2332 100%);
+            border-bottom: 1px solid #21262d;
+        }
+
+        .hero h1 {
+            font-size: 2.8rem;
+            font-weight: 700;
+            color: #e6edf3;
+            letter-spacing: -0.5px;
+        }
+
+        .hero h1 span {
+            background: linear-gradient(135deg, #58a6ff, #a371f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero .subtitle {
+            font-size: 1.1rem;
+            color: #8b949e;
+            margin-top: 8px;
+            font-style: italic;
+        }
+
+        .hero .tagline {
+            font-size: 1rem;
+            color: #58a6ff;
+            margin-top: 16px;
+            font-weight: 500;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            transition: border-color 0.2s, transform 0.2s;
+        }
+
+        .stat-card:hover {
+            border-color: #58a6ff;
+            transform: translateY(-2px);
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #e6edf3;
+        }
+
+        .stat-card .value.accent { color: #58a6ff; }
+        .stat-card .value.green { color: #3fb950; }
+        .stat-card .value.purple { color: #a371f7; }
+        .stat-card .value.orange { color: #d29922; }
+        .stat-card .value.pink { color: #f778ba; }
+
+        .stat-card .label {
+            font-size: 0.85rem;
+            color: #8b949e;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card .detail {
+            font-size: 0.8rem;
+            color: #6e7681;
+            margin-top: 8px;
+        }
+
+        /* Section */
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .section-header h2 {
+            font-size: 1.4rem;
+            color: #e6edf3;
+            font-weight: 600;
+        }
+
+        .section-header .badge {
+            font-size: 0.75rem;
+            background: #1f6feb33;
+            color: #58a6ff;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+
+        .section-header .badge.new {
+            background: #23863633;
+            color: #3fb950;
+        }
+
+        /* Diagram containers */
+        .diagram-container {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            padding: 30px;
+            overflow-x: auto;
+        }
+
+        .diagram-container .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+
+        /* Two-column layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 900px) {
+            .two-col { grid-template-columns: 1fr; }
+            .hero h1 { font-size: 2rem; }
+        }
+
+        /* Stack list */
+        .stack-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 40px;
+        }
+
+        .stack-card {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .stack-card h3 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #8b949e;
+            margin-bottom: 12px;
+        }
+
+        .stack-card .items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .stack-card .item {
+            font-size: 0.85rem;
+            background: #21262d;
+            color: #c9d1d9;
+            padding: 4px 12px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+        }
+
+        .stack-card .item.highlight {
+            border-color: #58a6ff;
+            color: #58a6ff;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 30px 20px;
+            color: #6e7681;
+            font-size: 0.85rem;
+            border-top: 1px solid #21262d;
+        }
+
+        .footer a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1><span>Yggdrasil</span> — Code Intelligence Engine</h1>
+    <div class="subtitle">Named after the Norse world tree connecting all realms</div>
+    <div class="tagline">Indexes codebases into a searchable knowledge graph with symbol extraction, call graph traversal, and blast radius analysis</div>
+</div>
+
+<div class="container">
+
+    <!-- Stats Cards -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="value accent">2,359</div>
+            <div class="label">Lines of Code</div>
+            <div class="detail">20 source files</div>
+        </div>
+        <div class="stat-card">
+            <div class="value green">9</div>
+            <div class="label">MCP Tools</div>
+            <div class="detail">+2 added today</div>
+        </div>
+        <div class="stat-card">
+            <div class="value purple">4</div>
+            <div class="label">Indexed Repos</div>
+            <div class="detail">Java, Kotlin, TypeScript</div>
+        </div>
+        <div class="stat-card">
+            <div class="value orange">5</div>
+            <div class="label">Database Tables</div>
+            <div class="detail">2 migrations applied</div>
+        </div>
+        <div class="stat-card">
+            <div class="value pink">9</div>
+            <div class="label">Commits</div>
+            <div class="detail">Apr 11 – Apr 16, 2026</div>
+        </div>
+    </div>
+
+    <!-- Stack Info -->
+    <div class="stack-grid">
+        <div class="stack-card">
+            <h3>Runtime &amp; Language</h3>
+            <div class="items">
+                <span class="item highlight">Bun</span>
+                <span class="item highlight">TypeScript</span>
+                <span class="item">Port 9130</span>
+            </div>
+        </div>
+        <div class="stack-card">
+            <h3>Database</h3>
+            <div class="items">
+                <span class="item highlight">PostgreSQL</span>
+                <span class="item">pgvector</span>
+                <span class="item">ci_repos</span>
+                <span class="item">ci_files</span>
+                <span class="item">ci_symbols</span>
+                <span class="item">ci_edges</span>
+                <span class="item">ci_import_map</span>
+            </div>
+        </div>
+        <div class="stack-card">
+            <h3>Dependencies (8)</h3>
+            <div class="items">
+                <span class="item">MCP SDK</span>
+                <span class="item">postgres</span>
+                <span class="item">web-tree-sitter</span>
+                <span class="item">tree-sitter-java</span>
+                <span class="item">tree-sitter-kotlin</span>
+                <span class="item">tree-sitter-typescript</span>
+                <span class="item">Xenova transformers</span>
+                <span class="item">Anthropic SDK</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Architecture Diagram -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Indexing Pipeline &amp; Architecture</h2>
+            <span class="badge">Core Flow</span>
+        </div>
+        <div class="diagram-container">
+            <div class="mermaid">
+flowchart LR
+    SRC["📁 Source Files"]
+    AST["🌳 Tree-sitter AST"]
+    SYM["🔍 Symbol Extraction"]
+    IMP["🔗 Import Resolution"]
+    CG["📊 Call Graph"]
+    EMB["🧠 Embeddings<br/><small>384-dim multilingual</small>"]
+    PG[("🗄️ PostgreSQL<br/><small>symbols + edges + vectors</small>")]
+    MCP["⚡ MCP Server<br/><small>:9130</small>"]
+
+    SRC --> AST --> SYM --> IMP --> CG --> EMB --> PG --> MCP
+
+    MCP --> T1["search"]
+    MCP --> T2["symbol_context"]
+    MCP --> T3["impact"]
+    MCP --> T4["detect_changes"]
+    MCP --> T5["file_outline"]
+    MCP --> T6["read_source"]
+    MCP --> T7["list_repos"]
+    MCP --> T8["search_pattern 🆕"]
+    MCP --> T9["list_files 🆕"]
+
+    style SRC fill:#1f6feb,stroke:#58a6ff,color:#fff
+    style AST fill:#238636,stroke:#3fb950,color:#fff
+    style SYM fill:#238636,stroke:#3fb950,color:#fff
+    style IMP fill:#238636,stroke:#3fb950,color:#fff
+    style CG fill:#238636,stroke:#3fb950,color:#fff
+    style EMB fill:#8957e5,stroke:#a371f7,color:#fff
+    style PG fill:#da3633,stroke:#f85149,color:#fff
+    style MCP fill:#1f6feb,stroke:#58a6ff,color:#fff
+    style T8 fill:#238636,stroke:#3fb950,color:#fff
+    style T9 fill:#238636,stroke:#3fb950,color:#fff
+            </div>
+        </div>
+    </div>
+
+    <!-- MCP Tools Diagram -->
+    <div class="section">
+        <div class="section-header">
+            <h2>MCP Tools</h2>
+            <span class="badge new">9 tools</span>
+        </div>
+        <div class="diagram-container">
+            <div class="mermaid">
+flowchart TB
+    subgraph SI["🧠 Symbol Intelligence"]
+        direction TB
+        S1["<b>search</b><br/>Hybrid FTS + semantic<br/>+ name match via RRF"]
+        S2["<b>symbol_context</b><br/>Callers, callees,<br/>inheritance, location"]
+        S3["<b>impact</b><br/>Blast radius with<br/>confidence scoring"]
+        S4["<b>detect_changes</b><br/>Git diff → affected<br/>symbols + blast radius"]
+    end
+
+    subgraph CN["📂 Code Navigation"]
+        direction TB
+        N1["<b>file_outline</b><br/>Symbol hierarchy,<br/>signatures, line numbers"]
+        N2["<b>read_source</b><br/>View file contents<br/>with line numbers"]
+        N3["<b>list_files</b> 🆕<br/>Browse file tree<br/>with glob + dir filters"]
+        N4["<b>list_repos</b><br/>All indexed repos<br/>with stats"]
+    end
+
+    subgraph PS["🔎 Pattern Search"]
+        direction TB
+        P1["<b>search_pattern</b> 🆕<br/>Ripgrep regex search<br/>across all indexed repos"]
+    end
+
+    style SI fill:#161b22,stroke:#58a6ff,color:#c9d1d9
+    style CN fill:#161b22,stroke:#a371f7,color:#c9d1d9
+    style PS fill:#161b22,stroke:#3fb950,color:#c9d1d9
+    style N3 fill:#238636,stroke:#3fb950,color:#fff
+    style P1 fill:#238636,stroke:#3fb950,color:#fff
+            </div>
+        </div>
+    </div>
+
+    <!-- Two column: Module Structure + Repos -->
+    <div class="two-col">
+        <!-- Module Structure -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Module Structure</h2>
+                <span class="badge">4 modules</span>
+            </div>
+            <div class="diagram-container">
+                <div class="mermaid">
+flowchart TB
+    ROOT["<b>src/</b><br/>2,359 LOC"]
+
+    subgraph IDX["indexer/ — 1,053 LOC"]
+        direction TB
+        I1["symbol-extractor.ts <small>290</small>"]
+        I2["index.ts <small>196</small>"]
+        I3["call-graph.ts <small>192</small>"]
+        I4["import-resolver.ts <small>123</small>"]
+        I5["edge-resolver.ts <small>119</small>"]
+        I6["file-walker.ts <small>58</small>"]
+        I7["parser.ts <small>54</small>"]
+        I8["ast-utils.ts <small>21</small>"]
+    end
+
+    subgraph MCPM["mcp/ — 395 LOC"]
+        M1["server.ts <small>395</small>"]
+    end
+
+    subgraph SRC["search/ — 368 LOC"]
+        S1s["hybrid-search.ts <small>147</small>"]
+        S2s["detect-changes.ts <small>146</small>"]
+        S3s["impact.ts <small>75</small>"]
+    end
+
+    subgraph DB["db/ — 368 LOC"]
+        D1["symbols.ts <small>140</small>"]
+        D2["edges.ts <small>104</small>"]
+        D3["files.ts <small>65</small>"]
+        D4["repos.ts <small>45</small>"]
+        D5["connection.ts <small>14</small>"]
+    end
+
+    ROOT --- IDX
+    ROOT --- MCPM
+    ROOT --- SRC
+    ROOT --- DB
+
+    style ROOT fill:#1f6feb,stroke:#58a6ff,color:#fff
+    style IDX fill:#161b22,stroke:#3fb950,color:#c9d1d9
+    style MCPM fill:#161b22,stroke:#58a6ff,color:#c9d1d9
+    style SRC fill:#161b22,stroke:#a371f7,color:#c9d1d9
+    style DB fill:#161b22,stroke:#d29922,color:#c9d1d9
+                </div>
+            </div>
+        </div>
+
+        <!-- Indexed Repos -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Indexed Repositories</h2>
+                <span class="badge">4 repos</span>
+            </div>
+            <div class="diagram-container">
+                <div class="mermaid">
+pie title Languages across indexed repos
+    "melosys-api (Java/Kotlin)" : 40
+    "melosys-eessi (Java/Kotlin)" : 25
+    "melosys-trygdeavgift-beregning (Java/Kotlin)" : 15
+    "melosys-web (TypeScript)" : 20
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Development Timeline -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Development Timeline</h2>
+            <span class="badge">9 commits in 6 days</span>
+        </div>
+        <div class="diagram-container">
+            <div class="mermaid">
+timeline
+    title Yggdrasil Development — April 2026
+    section Apr 11
+        Phase 1 : Code intelligence engine : File walker, parser, symbol extractor
+        Fix bugs : Simplify codebase after review
+        Phase 2 : Import resolution : Call graph : Impact analysis
+        README : Simplify Phase 2 after review
+        read_source : Multi-session MCP support
+        Embeddings : Multilingual embeddings : Simple FTS for Norwegian
+    section Apr 12
+        Re-index : Add --full flag : Force full re-index
+    section Apr 16
+        search_pattern + list_files : Ripgrep regex search : File tree browsing
+        Cleanup : Reuse DB functions : Dynamic SQL : Add LIMIT
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="footer">
+    <p>Yggdrasil — Companion to <a href="#">Muninn</a> (memory) and <a href="#">Huginn</a> (knowledge search)</p>
+    <p style="margin-top: 6px;">Generated on April 16, 2026 &middot; MCP endpoint: <code>http://127.0.0.1:9130/mcp</code></p>
+</div>
+
+<script>
+    mermaid.initialize({
+        startOnLoad: true,
+        theme: 'dark',
+        flowchart: {
+            useMaxWidth: true,
+            htmlLabels: true,
+            curve: 'basis',
+            padding: 15
+        },
+        sequence: {
+            useMaxWidth: true
+        },
+        themeVariables: {
+            darkMode: true,
+            background: '#161b22',
+            primaryColor: '#1f6feb',
+            primaryTextColor: '#e6edf3',
+            primaryBorderColor: '#58a6ff',
+            lineColor: '#30363d',
+            secondaryColor: '#21262d',
+            tertiaryColor: '#161b22',
+            noteBkgColor: '#21262d',
+            noteTextColor: '#c9d1d9',
+            noteBorderColor: '#30363d',
+            edgeLabelBackground: '#161b22',
+            clusterBkg: '#161b22',
+            clusterBorder: '#30363d',
+            titleColor: '#e6edf3',
+            pieStrokeColor: '#21262d',
+            pie1: '#58a6ff',
+            pie2: '#a371f7',
+            pie3: '#3fb950',
+            pie4: '#d29922'
+        }
+    });
+</script>
+</body>
+</html>
