@@ -1,6 +1,7 @@
 import { sql } from "../db/connection.ts";
 import { generateEmbedding } from "../embeddings.ts";
 import { toVectorLiteral } from "../db/symbols.ts";
+import type { Tracer, TraceTiming } from "../tracing/trace.ts";
 
 export interface SearchResult {
   id: string;
@@ -26,23 +27,37 @@ export async function hybridSearch(
     kind?: string;
     language?: string;
     limit?: number;
+    tracer?: Tracer;
   },
 ): Promise<SearchResult[]> {
   const limit = options?.limit ?? 10;
-  const candidateLimit = 30; // Pull more candidates for RRF merging
+  const candidateLimit = 30;
+  const tracer = options?.tracer;
 
-  // Generate embedding for semantic search
-  const embedding = await generateEmbedding(query);
+  const timed = <T>(label: TraceTiming, p: Promise<T>): Promise<T> => {
+    if (!tracer) return p;
+    const t = performance.now();
+    return p.then((r) => {
+      tracer.recordTiming(label, performance.now() - t);
+      return r;
+    });
+  };
+
+  tracer?.setQuery(query, {
+    repo: options?.repo,
+    kind: options?.kind,
+    language: options?.language,
+  });
+
+  const embedding = await timed("embedding", generateEmbedding(query));
   const embeddingStr = embedding ? toVectorLiteral(embedding) : null;
 
-  // Build optional filters
   const repoFilter = options?.repo ? sql`AND r.name = ${options.repo}` : sql``;
   const kindFilter = options?.kind ? sql`AND s.kind = ${options.kind}` : sql``;
   const langFilter = options?.language ? sql`AND f.language = ${options.language}` : sql``;
   const filters = sql`${repoFilter} ${kindFilter} ${langFilter}`;
 
-  // Run all three search strategies in parallel
-  const ftsPromise = sql<{ id: string; rank: number }[]>`
+  const ftsPromise = timed("fts", sql<{ id: string; rank: number }[]>`
     SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('simple', ${query})) as rank
     FROM ci_symbols s
     JOIN ci_files f ON f.id = s.file_id
@@ -51,10 +66,10 @@ export async function hybridSearch(
     ${filters}
     ORDER BY rank DESC
     LIMIT ${candidateLimit}
-  `;
+  `);
 
   const semanticPromise = embeddingStr
-    ? sql<{ id: string; rank: number }[]>`
+    ? timed("semantic", sql<{ id: string; rank: number }[]>`
         SELECT s.id, 1 - (s.embedding <=> ${embeddingStr}::vector) as rank
         FROM ci_symbols s
         JOIN ci_files f ON f.id = s.file_id
@@ -63,10 +78,10 @@ export async function hybridSearch(
         ${filters}
         ORDER BY s.embedding <=> ${embeddingStr}::vector
         LIMIT ${candidateLimit}
-      `
+      `)
     : Promise.resolve([] as { id: string; rank: number }[]);
 
-  const namePromise = sql<{ id: string; rank: number }[]>`
+  const namePromise = timed("name", sql<{ id: string; rank: number }[]>`
     SELECT s.id,
       CASE
         WHEN s.name = ${query} THEN 1.0
@@ -85,14 +100,20 @@ export async function hybridSearch(
     ${filters}
     ORDER BY rank DESC, s.kind ASC
     LIMIT ${candidateLimit}
-  `;
+  `);
 
   const [ftsResults, semanticResults, nameResults] = await Promise.all([
     ftsPromise, semanticPromise, namePromise,
   ]);
 
-  // 4. RRF merge
-  const K = 60; // RRF constant
+  if (tracer) {
+    ftsResults.forEach((r, i) => tracer.recordStage("fts", r.id, i + 1, r.rank));
+    semanticResults.forEach((r, i) => tracer.recordStage("semantic", r.id, i + 1, r.rank));
+    nameResults.forEach((r, i) => tracer.recordStage("name", r.id, i + 1, r.rank));
+  }
+
+  const tRrfStart = performance.now();
+  const K = 60;
   const scores = new Map<string, number>();
 
   const addScores = (results: { id: string; rank: number }[], weight: number) => {
@@ -104,17 +125,20 @@ export async function hybridSearch(
 
   addScores(ftsResults, 1.0);
   addScores(semanticResults, 1.0);
-  addScores(nameResults, 1.5); // Boost name matches
+  addScores(nameResults, 1.5);
 
-  // 5. Fetch full details for top results
-  const topIds = [...scores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([id]) => id);
+  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+  if (tracer) {
+    ranked.forEach(([id, score], i) => tracer.recordStage("rrf", id, i + 1, score));
+    tracer.recordTiming("rrf", performance.now() - tRrfStart);
+  }
 
+  const topIds = ranked.slice(0, limit).map(([id]) => id);
   if (topIds.length === 0) return [];
 
-  const details = await sql<Omit<SearchResult, "score">[]>`
+  const topIdSet = new Set(topIds);
+
+  const detailsPromise = sql<Omit<SearchResult, "score">[]>`
     SELECT s.id, s.name, s.qualified_name, s.kind, s.signature,
            f.path as file_path, r.name as repo_name,
            s.start_line, s.end_line
@@ -124,7 +148,24 @@ export async function hybridSearch(
     WHERE s.id = ANY(${topIds})
   `;
 
-  // Attach scores with kind-based boost: classes/interfaces/enums rank higher than fields/properties
+  // Annotation fetch is in parallel with the wider details query and only pulls
+  // the columns needed for the trace, so the trace-on path stays cheap.
+  const annotateIds = tracer
+    ? ranked.filter(([id]) => !topIdSet.has(id)).map(([id]) => id)
+    : [];
+  const annotatePromise = annotateIds.length
+    ? sql<{ id: string; qualified_name: string; kind: string }[]>`
+        SELECT id, qualified_name, kind FROM ci_symbols WHERE id = ANY(${annotateIds})
+      `
+    : Promise.resolve([] as { id: string; qualified_name: string; kind: string }[]);
+
+  const [details, annotations] = await Promise.all([detailsPromise, annotatePromise]);
+
+  if (tracer) {
+    for (const d of details) tracer.annotate(d.id, d.qualified_name, d.kind);
+    for (const a of annotations) tracer.annotate(a.id, a.qualified_name, a.kind);
+  }
+
   const kindBoost: Record<string, number> = {
     class: 1.5,
     interface: 1.5,
@@ -138,10 +179,16 @@ export async function hybridSearch(
     field: 0.7,
   };
 
-  return details
+  const finalResults = details
     .map((d) => ({
       ...d,
       score: (scores.get(d.id) ?? 0) * (kindBoost[d.kind] ?? 1.0),
     }))
     .sort((a, b) => b.score - a.score);
+
+  if (tracer) {
+    finalResults.forEach((r, i) => tracer.recordStage("final", r.id, i + 1, r.score));
+  }
+
+  return finalResults;
 }

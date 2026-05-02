@@ -35,6 +35,7 @@ bun run db:migrate                    # Apply schema to Postgres
 bun run index ~/source/nav/melosys-api   # Index a codebase
 bun run search "BehandlingService"    # Search from CLI
 bun run start                         # Start MCP server on port 9130
+bun run dev                           # …or in watch mode (auto-reload on edits)
 ```
 
 ## Architecture
@@ -121,17 +122,19 @@ erDiagram
 
 ### MCP tools
 
-The server exposes 6 tools over streamable HTTP on port 9130:
+The server exposes 9 tools over streamable HTTP on port 9130:
 
 | Tool | Description | Example use |
 |------|-------------|-------------|
-| `search` | Hybrid search (FTS + semantic + name match via RRF) | "Find code related to payment processing" |
+| `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg attaches a trace pointer URL — see [Tracing](#tracing). | "Find code related to payment processing" |
 | `symbol_context` | 360-degree view of a symbol: callers, callees, inheritance | "What calls this method? What does it extend?" |
 | `impact` | Blast radius — what breaks if this symbol changes? | "If I change Behandling, what's affected?" |
 | `detect_changes` | Map a git diff to affected symbols + their blast radius | "What's the impact of this PR?" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
 | `read_source` | Read source code of an indexed file with line numbers | "Show me lines 30-60 of BehandlingService.java" |
 | `list_repos` | List all indexed repositories with metadata | "What repos are indexed?" |
+| `search_pattern` | Text/regex search across indexed source files (delegates to ripgrep) | "Find all uses of `BigDecimal.ZERO`" |
+| `list_files` | List files in an indexed repo, filterable by directory and glob | "What `.kt` files live under `service/`?" |
 
 ### Search algorithm
 
@@ -157,6 +160,64 @@ Each search channel returns candidates ranked independently. RRF merges them wit
 - Name match weight: 1.5 (case-sensitive exact gets rank 1.0)
 
 Then a kind-based boost is applied: classes/interfaces get 1.5x, properties get 0.7x.
+
+## Tracing
+
+The `search` tool can emit a structured trace of every per-stage rank/score so an orchestrator (e.g. [Muninn](../muninn)) can render a waterfall showing exactly why a symbol ranked where it did.
+
+The trace is delivered out-of-band: the tool result still carries the normal JSON results, plus a single trailing line:
+
+```
+yggdrasil-trace-url: http://127.0.0.1:9130/api/trace/<id>
+```
+
+The orchestrator parses the URL, fetches `GET /api/trace/<id>`, and pins the JSON to its tool span. The trace itself stays in an in-memory TTL store (5 min default), so the tool result text remains small (~80 bytes overhead) and never blows past MCP output-size limits.
+
+### Enabling traces
+
+Both env vars must be set on the server process:
+
+```bash
+YGGDRASIL_TRACE_POINTER=1 YGGDRASIL_TRACE_DEFAULT=1 bun run dev
+```
+
+- `YGGDRASIL_TRACE_POINTER=1` is the master switch — without it, the `trace` arg and `YGGDRASIL_TRACE_DEFAULT` are no-ops (zero overhead).
+- `YGGDRASIL_TRACE_DEFAULT=1` records a trace on every call. Drop it if you want callers to opt in per-call via the `trace: true` arg instead.
+- `YGGDRASIL_TRACE_TTL_SECONDS` (default `300`) controls how long a trace is fetchable before it's evicted.
+
+### Trace schema (v1)
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "tool": "search",
+  "query": { "raw": "BehandlingService", "filters": { "repo": "melosys-api" } },
+  "candidates": [{
+    "symbolId": "...",
+    "qualifiedName": "no.nav.melosys.service.BehandlingService",
+    "kind": "class",
+    "stages": {
+      "fts":      { "rank": 1, "score": 0.42 },
+      "semantic": { "rank": 3, "score": 0.88 },
+      "name":     { "rank": 1, "score": 1.0 },
+      "rrf":      { "rank": 1, "score": 0.033 },
+      "final":    { "rank": 1, "score": 0.05 }
+    }
+  }],
+  "timingsMs": { "embedding": 12, "fts": 8, "semantic": 14, "name": 3, "rrf": 1, "total": 38 }
+}
+```
+
+A typical search produces ~85 candidates (the deduped union of the three retrieval channels at fetch_k=30 each), all annotated with `qualifiedName` + `kind`. Each `stages` map only includes the channels that actually hit the symbol.
+
+### `GET /api/trace/<id>`
+
+| Status | Body | When |
+|--------|------|------|
+| 200 | The trace JSON | Trace exists and TTL hasn't expired |
+| 404 | `{"detail": "trace not found or expired"}` | Unknown id, or evicted |
+
+Reads are non-consumptive — fetching the same id twice within the TTL returns the same trace, so retries are safe.
 
 ## Performance
 
@@ -195,6 +256,9 @@ Tested on the Melosys multi-repo stack:
 | `YGGDRASIL_PORT` | `9130` | MCP server port |
 | `EMBEDDING_MODEL` | `Xenova/multilingual-e5-small` | HuggingFace model ID (ONNX-compatible) |
 | `EMBEDDING_DIMS` | `384` | Vector dimensions (must match model + DB column) |
+| `YGGDRASIL_TRACE_POINTER` | _(off)_ | Set to `1` to enable trace pointer mode on `search`. Master switch — without it, the `trace` arg and `YGGDRASIL_TRACE_DEFAULT` are no-ops. |
+| `YGGDRASIL_TRACE_DEFAULT` | _(off)_ | Set to `1` to record a trace on every `search` call (no need for callers to pass `trace: true`). Requires `YGGDRASIL_TRACE_POINTER=1`. |
+| `YGGDRASIL_TRACE_TTL_SECONDS` | `300` | How long stored traces live before eviction. |
 
 The default embedding model supports Norwegian and other non-English identifiers. For English-only codebases, `Xenova/all-MiniLM-L6-v2` is faster. For code-optimized search, try `jinaai/jina-embeddings-v2-base-code` (768 dims — requires a schema change).
 
@@ -247,6 +311,9 @@ src/
 │   └── edges.ts              ci_edges CRUD + traversal
 ├── mcp/
 │   └── server.ts             MCP streamable HTTP server
+├── tracing/
+│   ├── trace.ts              Tracer + TraceV1 schema
+│   └── trace-store.ts        In-memory TTL trace store + pointer-line helper
 ├── embeddings.ts             Xenova model wrapper
 ├── cli.ts                    CLI entry point
 └── config.ts                 Repo config loader
