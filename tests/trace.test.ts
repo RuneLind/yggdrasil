@@ -14,14 +14,13 @@ describe("Tracer", () => {
     t.annotate("sym2", "com.foo.Baz", "method");
     t.recordTiming("embedding", 12);
     t.recordTiming("fts", 8);
-    t.recordTiming("total", 38);
 
     const out = t.toJSON();
     expect(out.schemaVersion).toBe(TRACE_SCHEMA_VERSION);
     expect(out.tool).toBe("search");
     expect(out.query.raw).toBe("hello world");
     expect(out.query.filters).toEqual({ repo: "muninn", language: "kotlin" });
-    expect(out.timingsMs.total).toBe(38);
+    expect(out.timingsMs.total).toBeGreaterThanOrEqual(0);
     expect(out.timingsMs.embedding).toBe(12);
     expect(out.timingsMs.fts).toBe(8);
 
@@ -53,7 +52,7 @@ describe("Tracer", () => {
     expect(out.query.filters).toBeUndefined();
   });
 
-  test("toJSON computes a non-negative total when not explicitly set", () => {
+  test("toJSON always computes total from construction time", () => {
     const t = new Tracer();
     t.setQuery("q");
     const out = t.toJSON();
@@ -117,10 +116,9 @@ describe("shouldTrace", () => {
 describe("optional-chaining no-op", () => {
   test("undefined tracer is a no-op via ?.", () => {
     let tracer: Tracer | undefined;
-    // None of these should throw.
     tracer?.setQuery("q");
     tracer?.recordStage("fts", "sym", 1, 0.5);
-    tracer?.recordTiming("total", 10);
+    tracer?.recordTiming("embedding", 10);
     tracer?.annotate("sym", "Foo", "class");
     expect(tracer).toBeUndefined();
   });

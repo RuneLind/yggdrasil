@@ -14,8 +14,8 @@ export function pointerModeEnabled(): boolean {
   return process.env.YGGDRASIL_TRACE_POINTER === "1";
 }
 
-export function traceDefaultEnabled(): boolean {
-  return process.env.YGGDRASIL_TRACE_DEFAULT === "1";
+export function tracePointerLine(traceId: string, port: number): string {
+  return `\n\nyggdrasil-trace-url: http://127.0.0.1:${port}/api/trace/${traceId}\n`;
 }
 
 interface Entry {
@@ -45,9 +45,6 @@ export class TraceStore {
 
   put(trace: unknown): string {
     this.gc();
-    // Belt-and-suspenders: if puts arrive faster than fetches/expiry drain
-    // them, evict the soonest-to-expire entry so memory cannot grow without
-    // bound.
     if (this.entries.size >= this.maxEntries) {
       let oldestId: string | null = null;
       let oldestExpiry = Infinity;

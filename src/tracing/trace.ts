@@ -2,7 +2,7 @@ export const TRACE_SCHEMA_VERSION = 1;
 
 export type TraceStage = "fts" | "semantic" | "name" | "rrf" | "final";
 
-export type TraceTiming = "embedding" | "fts" | "semantic" | "name" | "rrf" | "total";
+export type TraceTiming = "embedding" | "fts" | "semantic" | "name" | "rrf";
 
 export interface TraceV1 {
   schemaVersion: 1;
@@ -35,12 +35,8 @@ export class Tracer {
 
   setQuery(raw: string, filters?: { repo?: string; kind?: string; language?: string }): void {
     this.queryRaw = raw;
-    if (filters) {
-      const cleaned: { repo?: string; kind?: string; language?: string } = {};
-      if (filters.repo !== undefined) cleaned.repo = filters.repo;
-      if (filters.kind !== undefined) cleaned.kind = filters.kind;
-      if (filters.language !== undefined) cleaned.language = filters.language;
-      if (Object.keys(cleaned).length > 0) this.queryFilters = cleaned;
+    if (filters && Object.values(filters).some((v) => v !== undefined)) {
+      this.queryFilters = filters;
     }
   }
 
@@ -59,7 +55,6 @@ export class Tracer {
   }
 
   toJSON(): TraceV1 {
-    const total = this.timings.total ?? Math.round(performance.now() - this.tStart);
     const candidates = [...this.candidates.entries()].map(([symbolId, c]) => ({
       symbolId,
       qualifiedName: c.qualifiedName,
@@ -71,7 +66,7 @@ export class Tracer {
       tool: "search",
       query: { raw: this.queryRaw },
       candidates,
-      timingsMs: { ...this.timings, total },
+      timingsMs: { ...this.timings, total: Math.round(performance.now() - this.tStart) },
     };
     if (this.queryFilters) trace.query.filters = this.queryFilters;
     return trace;
@@ -87,10 +82,6 @@ export class Tracer {
   }
 }
 
-/**
- * Decide whether tracing should be on for a tool call.
- * Per-call `traceArg` (when defined) wins; otherwise the YGGDRASIL_TRACE_DEFAULT env.
- */
 export function shouldTrace(traceArg: boolean | undefined): boolean {
   if (traceArg !== undefined) return traceArg;
   return process.env.YGGDRASIL_TRACE_DEFAULT === "1";

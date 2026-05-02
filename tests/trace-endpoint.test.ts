@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { TraceStore } from "../src/tracing/trace-store.ts";
+import { TraceStore, tracePointerLine } from "../src/tracing/trace-store.ts";
 import { Tracer } from "../src/tracing/trace.ts";
 
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -57,20 +57,6 @@ describe("/api/trace/<id> endpoint", () => {
     expect(typeof body.detail).toBe("string");
   });
 
-  test("expired entry returns 404", async () => {
-    const shortStore = new TraceStore({ ttlSeconds: 60, clock: ((): () => number => {
-      let t = 0;
-      return () => t;
-    })() });
-    // Use the live store but force expiry through clock manipulation isn't trivial here;
-    // instead, simulate a fresh store with an immediate-expiry put → get.
-    // We rely on the unit tests to cover the exact-boundary behavior; here we just confirm
-    // the HTTP shape for a missing trace, which is the same path expired entries take.
-    void shortStore;
-    const res = await fetch(`${baseUrl}/api/trace/ffffffffffffffff`);
-    expect(res.status).toBe(404);
-  });
-
   test("get is non-consumptive: same id can be fetched twice", async () => {
     const tracer = new Tracer();
     tracer.setQuery("retry me");
@@ -85,17 +71,10 @@ describe("/api/trace/<id> endpoint", () => {
 
 describe("pointer line format", () => {
   test("matches the contract muninn parser expects", () => {
-    const PORT = 9130;
     const id = "abcdef0123456789";
-    const line = `\n\nyggdrasil-trace-url: http://127.0.0.1:${PORT}/api/trace/${id}\n`;
-    // Blank line before the marker:
+    const line = tracePointerLine(id, 9130);
     expect(line.startsWith("\n\n")).toBe(true);
-    // Single space after the colon:
-    expect(line).toContain(": http://");
-    // No double colons or extra whitespace shenanigans:
-    const inner = line.slice(2, -1);
-    expect(inner).toBe(`yggdrasil-trace-url: http://127.0.0.1:${PORT}/api/trace/${id}`);
-    // Trailing newline:
     expect(line.endsWith("\n")).toBe(true);
+    expect(line.slice(2, -1)).toBe(`yggdrasil-trace-url: http://127.0.0.1:9130/api/trace/${id}`);
   });
 });
