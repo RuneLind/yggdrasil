@@ -44,11 +44,35 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 
 | Tool | Purpose |
 |------|---------|
-| `search` | Hybrid search (FTS + semantic + name match via RRF) |
+| `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg → pointer-mode trace (see Tracing below) |
 | `symbol_context` | 360-degree view: callers, callees, inheritance |
 | `impact` | Blast radius with confidence scoring by depth |
 | `detect_changes` | Git diff → affected symbols and their blast radius |
 | `file_outline` | All symbols in a file with hierarchy |
+| `read_source` | Read source code of an indexed file with line numbers |
+| `list_repos` | List all indexed repositories |
+| `search_pattern` | Text/regex search across indexed source files (ripgrep) |
+| `list_files` | List files in an indexed repo, filterable by glob |
+
+## Tracing
+
+Pointer-mode tracing on the `search` tool. When enabled, the tool result ends with a trailing `yggdrasil-trace-url: http://127.0.0.1:<port>/api/trace/<id>` line. The trace itself is held in an in-memory TTL store and fetched out-of-band via `GET /api/trace/<id>`. Mirrors huginn's pattern; consumed by muninn.
+
+Env flags:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `YGGDRASIL_TRACE_POINTER` | off | Master switch. Set to `1` to enable any tracing (zero overhead when off). |
+| `YGGDRASIL_TRACE_DEFAULT` | off | Set to `1` to record a trace on every `search` call without callers passing `trace: true`. Requires the master switch. |
+| `YGGDRASIL_TRACE_TTL_SECONDS` | `300` | How long stored traces are fetchable. |
+
+Run with traces:
+
+```bash
+YGGDRASIL_TRACE_POINTER=1 YGGDRASIL_TRACE_DEFAULT=1 bun run dev
+```
+
+See `src/tracing/trace.ts` for the `TraceV1` schema and `src/tracing/trace-store.ts` for the store + pointer-line helper.
 
 ## Conventions
 
@@ -105,7 +129,10 @@ src/
 │   ├── symbols.ts           — ci_symbols CRUD + search
 │   └── edges.ts             — ci_edges CRUD + traversal
 ├── mcp/
-│   └── server.ts            — MCP server (streamable-http)
+│   └── server.ts            — MCP server (streamable-http) + /api/trace/<id> endpoint
+├── tracing/
+│   ├── trace.ts             — Tracer + TraceV1 schema
+│   └── trace-store.ts       — in-memory TTL trace store + pointer-line helper
 ├── embeddings.ts            — Xenova embedding generation
 ├── cli.ts                   — CLI entry point
 └── config.ts                — repo configuration
