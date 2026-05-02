@@ -8,8 +8,14 @@ import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
 import { getRepo, listRepos } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
+import { Tracer, shouldTrace } from "../tracing/trace.ts";
+import { defaultTraceStore, pointerModeEnabled } from "../tracing/trace-store.ts";
 
 const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
+
+function tracePointerLine(traceId: string): string {
+  return `\n\nyggdrasil-trace-url: http://127.0.0.1:${PORT}/api/trace/${traceId}\n`;
+}
 
 /** Convert a simple glob pattern to SQL LIKE: * → %, ? → _, ** → % */
 function globToLike(glob: string): string {
@@ -45,9 +51,19 @@ server.tool(
     kind: z.string().optional().describe("Filter by symbol kind: class, method, function, interface, enum"),
     language: z.string().optional().describe("Filter by language: java, kotlin, typescript"),
     limit: z.number().optional().describe("Max results (default 10)"),
+    trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
-  async ({ query, repo, kind, language, limit }) => {
-    return jsonResponse(await hybridSearch(query, { repo, kind, language, limit }));
+  async ({ query, repo, kind, language, limit, trace }) => {
+    // Pointer mode is the only supported wire format, so it gates recording too.
+    const traceOn = shouldTrace(trace) && pointerModeEnabled();
+    const tracer = traceOn ? new Tracer() : undefined;
+    const results = await hybridSearch(query, { repo, kind, language, limit, tracer });
+    const body = JSON.stringify(results, null, 2);
+    if (tracer) {
+      const traceId = defaultTraceStore().put(tracer.toJSON());
+      return { content: [{ type: "text" as const, text: body + tracePointerLine(traceId) }] };
+    }
+    return { content: [{ type: "text" as const, text: body }] };
   },
 );
 
@@ -361,6 +377,15 @@ Bun.serve({
 
     if (url.pathname === "/health") {
       return Response.json({ status: "ok", tools: TOOL_COUNT });
+    }
+
+    if (url.pathname.startsWith("/api/trace/")) {
+      const id = url.pathname.slice("/api/trace/".length);
+      const trace = defaultTraceStore().get(id);
+      if (!trace) {
+        return Response.json({ detail: "trace not found or expired" }, { status: 404 });
+      }
+      return Response.json(trace);
     }
 
     if (url.pathname !== "/mcp") {
