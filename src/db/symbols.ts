@@ -123,8 +123,12 @@ export async function findSymbolByQualifiedName(
 export async function getSymbolsByFile(
   fileId: string,
 ): Promise<CiSymbol[]> {
+  // Explicit column list — the table also has embedding (384-dim vector) and
+  // search_vector (FTS tsvector) which would balloon JSON responses if returned.
   return sql<CiSymbol[]>`
-    SELECT * FROM ci_symbols
+    SELECT id, file_id, name, qualified_name, kind, parent_id,
+           start_line, end_line, signature, doc_comment, visibility, is_static
+    FROM ci_symbols
     WHERE file_id = ${fileId}
     ORDER BY start_line
   `;
