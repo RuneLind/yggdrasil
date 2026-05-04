@@ -1,8 +1,10 @@
 import { sql } from "../db/connection.ts";
 import { getRepo } from "../db/repos.ts";
 import { analyzeImpact } from "./impact.ts";
+import type { DetectChangesTracer } from "../tracing/trace.ts";
 
 export interface ChangedSymbol {
+  id: string;
   name: string;
   qualified_name: string;
   kind: string;
@@ -13,70 +15,80 @@ export interface ChangeDetectionResult {
   repo: string;
   ref: string;
   changedFiles: string[];
-  changedSymbols: ChangedSymbol[];
+  changedSymbols: Omit<ChangedSymbol, "id">[];
   affectedSymbols: {
     name: string;
     qualified_name: string;
     kind: string;
     file_path: string;
     repo_name: string;
-    via: string; // which changed symbol causes this impact
+    via: string;
     confidence: number;
   }[];
 }
 
-/** Parse git diff to get changed files and line ranges. */
-async function getChangedLines(
-  repoPath: string,
-  ref?: string,
-): Promise<Map<string, Set<number>>> {
+interface DiffSummary {
+  files: Map<string, Set<number>>;
+  addedLines: number;
+  removedLines: number;
+}
+
+/** Parse git diff to get changed files, added line ranges, and total added/removed line counts. */
+async function getChangedLines(repoPath: string, ref?: string): Promise<DiffSummary> {
   const args = ref
     ? ["git", "diff", ref, "--unified=0", "--no-color"]
     : ["git", "diff", "--unified=0", "--no-color"];
 
-  const proc = Bun.spawn(args, {
-    cwd: repoPath,
-    stdout: "pipe",
-    stderr: "ignore",
-  });
+  const proc = Bun.spawn(args, { cwd: repoPath, stdout: "pipe", stderr: "ignore" });
   const output = await new Response(proc.stdout).text();
 
-  const result = new Map<string, Set<number>>();
+  const files = new Map<string, Set<number>>();
+  let addedLines = 0;
+  let removedLines = 0;
   let currentFile: string | null = null;
 
   for (const line of output.split("\n")) {
     if (line.startsWith("+++ b/")) {
       currentFile = line.slice(6);
-      if (!result.has(currentFile)) result.set(currentFile, new Set());
+      if (!files.has(currentFile)) files.set(currentFile, new Set());
     } else if (line.startsWith("@@ ") && currentFile) {
       // Parse hunk header: @@ -start,count +start,count @@
-      const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+      const match = line.match(/@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (match) {
-        const start = parseInt(match[1], 10);
-        const count = parseInt(match[2] ?? "1", 10);
-        const lines = result.get(currentFile)!;
-        for (let i = start; i < start + count; i++) {
-          lines.add(i);
-        }
+        const removed = parseInt(match[1] ?? "1", 10);
+        const start = parseInt(match[2], 10);
+        const added = parseInt(match[3] ?? "1", 10);
+        addedLines += added;
+        removedLines += removed;
+        const lines = files.get(currentFile)!;
+        for (let i = start; i < start + added; i++) lines.add(i);
       }
     }
   }
 
-  return result;
+  return { files, addedLines, removedLines };
 }
 
 /** Detect which indexed symbols overlap with git changes, then compute impact. */
 export async function detectChanges(
   repoName: string,
   ref?: string,
+  tracer?: DetectChangesTracer,
 ): Promise<ChangeDetectionResult | null> {
+  tracer?.setQuery(repoName, ref);
+
   const repo = await getRepo(repoName);
   if (!repo) return null;
 
-  const changedLines = await getChangedLines(repo.path, ref);
-  const changedFiles = [...changedLines.keys()];
+  const tDiffStart = performance.now();
+  const diff = await getChangedLines(repo.path, ref);
+  tracer?.recordTiming("diff", performance.now() - tDiffStart);
+  tracer?.setDiff(diff.files.size, diff.addedLines, diff.removedLines);
+
+  const changedFiles = [...diff.files.keys()];
 
   if (changedFiles.length === 0) {
+    tracer?.setTotals(0, 0);
     return {
       repo: repoName,
       ref: ref ?? "working tree",
@@ -87,16 +99,21 @@ export async function detectChanges(
   }
 
   // Find symbols in changed files that overlap with changed lines
+  const tSymbolStart = performance.now();
   const changedSymbols: ChangedSymbol[] = [];
 
-  for (const [filePath, lines] of changedLines) {
+  for (const [filePath, lines] of diff.files) {
     let minLine = Infinity, maxLine = -Infinity;
     for (const l of lines) {
       if (l < minLine) minLine = l;
       if (l > maxLine) maxLine = l;
     }
+    if (minLine === Infinity) {
+      tracer?.recordFileSymbols(filePath, 0);
+      continue;
+    }
     const symbols = await sql<ChangedSymbol[]>`
-      SELECT s.name, s.qualified_name, s.kind, f.path as file_path
+      SELECT s.id, s.name, s.qualified_name, s.kind, f.path as file_path
       FROM ci_symbols s
       JOIN ci_files f ON f.id = s.file_id
       JOIN ci_repos r ON r.id = f.repo_id
@@ -105,15 +122,20 @@ export async function detectChanges(
         AND s.start_line <= ${maxLine}
         AND s.end_line >= ${minLine}
     `;
+    tracer?.recordFileSymbols(filePath, symbols.length);
     changedSymbols.push(...symbols);
   }
+  tracer?.recordTiming("symbolResolution", performance.now() - tSymbolStart);
 
   // Compute impact for each changed symbol
+  const tImpactStart = performance.now();
   const affectedMap = new Map<string, ChangeDetectionResult["affectedSymbols"][0]>();
 
   for (const sym of changedSymbols) {
     const impact = await analyzeImpact(sym.qualified_name, { repo: repoName });
     if (!impact) continue;
+
+    tracer?.recordImpact(sym.id, sym.qualified_name, impact.affected.length);
 
     for (const entry of impact.affected) {
       const key = entry.qualified_name;
@@ -131,16 +153,16 @@ export async function detectChanges(
       }
     }
   }
+  tracer?.recordTiming("impact", performance.now() - tImpactStart);
 
-  const result: ChangeDetectionResult = {
+  const affectedSymbols = [...affectedMap.values()].sort((a, b) => b.confidence - a.confidence);
+  tracer?.setTotals(changedSymbols.length, affectedSymbols.length);
+
+  return {
     repo: repoName,
     ref: ref ?? "working tree",
     changedFiles,
-    changedSymbols,
-    affectedSymbols: [...affectedMap.values()].sort(
-      (a, b) => b.confidence - a.confidence,
-    ),
+    changedSymbols: changedSymbols.map(({ id: _id, ...rest }) => rest),
+    affectedSymbols,
   };
-
-  return result;
 }

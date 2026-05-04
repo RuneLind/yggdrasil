@@ -128,12 +128,12 @@ The server exposes 9 tools over streamable HTTP on port 9130:
 |------|-------------|-------------|
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg attaches a trace pointer URL — see [Tracing](#tracing). | "Find code related to payment processing" |
 | `symbol_context` | 360-degree view of a symbol: callers, callees, inheritance | "What calls this method? What does it extend?" |
-| `impact` | Blast radius — what breaks if this symbol changes? | "If I change Behandling, what's affected?" |
-| `detect_changes` | Map a git diff to affected symbols + their blast radius | "What's the impact of this PR?" |
+| `impact` | Blast radius — what breaks if this symbol changes? Optional `trace` arg. | "If I change Behandling, what's affected?" |
+| `detect_changes` | Map a git diff to affected symbols + their blast radius. Optional `trace` arg. | "What's the impact of this PR?" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
 | `read_source` | Read source code of an indexed file with line numbers | "Show me lines 30-60 of BehandlingService.java" |
 | `list_repos` | List all indexed repositories with metadata | "What repos are indexed?" |
-| `search_pattern` | Text/regex search across indexed source files (delegates to ripgrep) | "Find all uses of `BigDecimal.ZERO`" |
+| `search_pattern` | Text/regex search across indexed source files (delegates to ripgrep). Optional `trace` arg. | "Find all uses of `BigDecimal.ZERO`" |
 | `list_files` | List files in an indexed repo, filterable by directory and glob | "What `.kt` files live under `service/`?" |
 
 ### Search algorithm
@@ -163,15 +163,25 @@ Then a kind-based boost is applied: classes/interfaces get 1.5x, properties get 
 
 ## Tracing
 
-The `search` tool can emit a structured trace of every per-stage rank/score so an orchestrator (e.g. [Muninn](../muninn)) can render a waterfall showing exactly why a symbol ranked where it did.
+Four pipeline tools (`search`, `impact`, `search_pattern`, `detect_changes`) can emit a structured trace of their internal funnel so an orchestrator (e.g. [Muninn](../muninn)) can render a per-tool panel showing exactly what got filtered where.
 
-The trace is delivered out-of-band: the tool result still carries the normal JSON results, plus a single trailing line:
+The trace is delivered out-of-band: the tool result still carries the normal JSON output, plus a single trailing line:
 
 ```
 yggdrasil-trace-url: http://127.0.0.1:9130/api/trace/<id>
 ```
 
-The orchestrator parses the URL, fetches `GET /api/trace/<id>`, and pins the JSON to its tool span. The trace itself stays in an in-memory TTL store (5 min default), so the tool result text remains small (~80 bytes overhead) and never blows past MCP output-size limits.
+The orchestrator parses the URL, fetches `GET /api/trace/<id>`, and pins the JSON to its tool span. The trace itself stays in an in-memory TTL store (10 min default), so the tool result text remains small (~80 bytes overhead) and never blows past MCP output-size limits.
+
+### Per-tool trace coverage
+
+| Tool | Traced? | Why |
+|------|---------|-----|
+| `search` | yes | Hybrid retrieval pipeline — FTS / semantic / name → RRF → final |
+| `impact` | yes | BFS hop counts, confidence buckets, top results |
+| `search_pattern` | yes | rg invocation, per-repo match counts, pre-trim totals |
+| `detect_changes` | yes | Diff stats, per-file symbol extraction, blast radius per changed symbol |
+| `symbol_context`, `read_source`, `file_outline`, `list_files`, `list_repos` | no | Single-step deterministic queries; nothing meaningful to surface |
 
 ### Enabling traces
 
@@ -182,10 +192,25 @@ YGGDRASIL_TRACE_POINTER=1 YGGDRASIL_TRACE_DEFAULT=1 bun run dev
 ```
 
 - `YGGDRASIL_TRACE_POINTER=1` is the master switch — without it, the `trace` arg and `YGGDRASIL_TRACE_DEFAULT` are no-ops (zero overhead).
-- `YGGDRASIL_TRACE_DEFAULT=1` records a trace on every call. Drop it if you want callers to opt in per-call via the `trace: true` arg instead.
-- `YGGDRASIL_TRACE_TTL_SECONDS` (default `300`) controls how long a trace is fetchable before it's evicted.
+- `YGGDRASIL_TRACE_DEFAULT=1` records a trace on every traced call. Drop it if you want callers to opt in per-call via the `trace: true` arg instead.
+- `YGGDRASIL_TRACE_TTL_SECONDS` (default `600`) controls how long a trace is fetchable before it's evicted.
 
 ### Trace schema (v1)
+
+`TraceV1` is a discriminated union over per-tool variants plus a generic escape hatch:
+
+```ts
+type TraceV1 =
+  | TraceSearchV1          // tool: "search"
+  | TraceImpactV1          // tool: "impact"
+  | TracePatternV1         // tool: "search_pattern"
+  | TraceDetectChangesV1   // tool: "detect_changes"
+  | TraceGenericV1;        // shape: "generic" — for tools without a typed variant
+```
+
+The discriminator is `tool` for typed variants; `TraceGenericV1` carries a separate `shape: "generic"` field so consumers can narrow cleanly. The `tool` field is the bare yggdrasil tool name (`"search"`, `"impact"`, …), not the MCP-prefixed form (`"mcp__yggdrasil__search"` / `"yggdrasil-search"`).
+
+Example `TraceSearchV1`:
 
 ```jsonc
 {
@@ -208,7 +233,26 @@ YGGDRASIL_TRACE_POINTER=1 YGGDRASIL_TRACE_DEFAULT=1 bun run dev
 }
 ```
 
-A typical search produces ~85 candidates (the deduped union of the three retrieval channels at fetch_k=30 each), all annotated with `qualifiedName` + `kind`. Each `stages` map only includes the channels that actually hit the symbol.
+Example `TraceImpactV1`:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "tool": "impact",
+  "query": { "qualifiedName": "com.foo.Bar.baz", "repo": "melosys-api", "maxDepth": 3 },
+  "start": { "symbolId": "...", "qualifiedName": "com.foo.Bar.baz", "kind": "method" },
+  "hops": [{ "depth": 0, "candidateCount": 12 }, { "depth": 1, "candidateCount": 5 }],
+  "confidenceBuckets": [
+    { "min": 0.8, "max": 1.0, "count": 8 },
+    { "min": 0.6, "max": 0.8, "count": 4 }
+  ],
+  "finalCount": 17,
+  "topResults": [/* up to 20 entries */],
+  "timingsMs": { "lookup": 12, "traversal": 80, "scoring": 4, "total": 98 }
+}
+```
+
+See `src/tracing/trace.ts` for the full schema of each variant.
 
 ### `GET /api/trace/<id>`
 
@@ -256,9 +300,9 @@ Tested on the Melosys multi-repo stack:
 | `YGGDRASIL_PORT` | `9130` | MCP server port |
 | `EMBEDDING_MODEL` | `Xenova/multilingual-e5-small` | HuggingFace model ID (ONNX-compatible) |
 | `EMBEDDING_DIMS` | `384` | Vector dimensions (must match model + DB column) |
-| `YGGDRASIL_TRACE_POINTER` | _(off)_ | Set to `1` to enable trace pointer mode on `search`. Master switch — without it, the `trace` arg and `YGGDRASIL_TRACE_DEFAULT` are no-ops. |
-| `YGGDRASIL_TRACE_DEFAULT` | _(off)_ | Set to `1` to record a trace on every `search` call (no need for callers to pass `trace: true`). Requires `YGGDRASIL_TRACE_POINTER=1`. |
-| `YGGDRASIL_TRACE_TTL_SECONDS` | `300` | How long stored traces live before eviction. |
+| `YGGDRASIL_TRACE_POINTER` | _(off)_ | Set to `1` to enable trace pointer mode on the four traced tools (`search`, `impact`, `search_pattern`, `detect_changes`). Master switch — without it, the `trace` arg and `YGGDRASIL_TRACE_DEFAULT` are no-ops. |
+| `YGGDRASIL_TRACE_DEFAULT` | _(off)_ | Set to `1` to record a trace on every traced call (no need for callers to pass `trace: true`). Requires `YGGDRASIL_TRACE_POINTER=1`. |
+| `YGGDRASIL_TRACE_TTL_SECONDS` | `600` | How long stored traces live before eviction. |
 
 The default embedding model supports Norwegian and other non-English identifiers. For English-only codebases, `Xenova/all-MiniLM-L6-v2` is faster. For code-optimized search, try `jinaai/jina-embeddings-v2-base-code` (768 dims — requires a schema change).
 
@@ -312,7 +356,7 @@ src/
 ├── mcp/
 │   └── server.ts             MCP streamable HTTP server
 ├── tracing/
-│   ├── trace.ts              Tracer + TraceV1 schema
+│   ├── trace.ts              TraceV1 union + per-tool tracer classes
 │   └── trace-store.ts        In-memory TTL trace store + pointer-line helper
 ├── embeddings.ts             Xenova model wrapper
 ├── cli.ts                    CLI entry point

@@ -1,7 +1,7 @@
 import { sql } from "../db/connection.ts";
 import { generateEmbedding } from "../embeddings.ts";
 import { toVectorLiteral } from "../db/symbols.ts";
-import type { Tracer, TraceTiming } from "../tracing/trace.ts";
+import type { SearchTracer, TraceSearchTiming } from "../tracing/trace.ts";
 
 export interface SearchResult {
   id: string;
@@ -27,14 +27,14 @@ export async function hybridSearch(
     kind?: string;
     language?: string;
     limit?: number;
-    tracer?: Tracer;
+    tracer?: SearchTracer;
   },
 ): Promise<SearchResult[]> {
   const limit = options?.limit ?? 10;
   const candidateLimit = 30;
   const tracer = options?.tracer;
 
-  const timed = <T>(label: TraceTiming, p: Promise<T>): Promise<T> => {
+  const timed = <T>(label: TraceSearchTiming, p: Promise<T>): Promise<T> => {
     if (!tracer) return p;
     const t = performance.now();
     return p.then((r) => {

@@ -1,9 +1,9 @@
 import { describe, test, expect } from "bun:test";
-import { Tracer, shouldTrace, TRACE_SCHEMA_VERSION } from "../src/tracing/trace.ts";
+import { SearchTracer, shouldTrace, TRACE_SCHEMA_VERSION } from "../src/tracing/trace.ts";
 
-describe("Tracer", () => {
+describe("SearchTracer", () => {
   test("toJSON returns schema-shaped object", () => {
-    const t = new Tracer();
+    const t = new SearchTracer();
     t.setQuery("hello world", { repo: "muninn", language: "kotlin" });
     t.recordStage("fts", "sym1", 1, 0.42);
     t.recordStage("semantic", "sym1", 3, 0.88);
@@ -39,28 +39,28 @@ describe("Tracer", () => {
   });
 
   test("setQuery omits undefined filter fields", () => {
-    const t = new Tracer();
+    const t = new SearchTracer();
     t.setQuery("q", { repo: undefined, kind: "class", language: undefined });
     const out = t.toJSON();
     expect(out.query.filters).toEqual({ kind: "class" });
   });
 
   test("setQuery without filters omits the filters key", () => {
-    const t = new Tracer();
+    const t = new SearchTracer();
     t.setQuery("q");
     const out = t.toJSON();
     expect(out.query.filters).toBeUndefined();
   });
 
   test("toJSON always computes total from construction time", () => {
-    const t = new Tracer();
+    const t = new SearchTracer();
     t.setQuery("q");
     const out = t.toJSON();
     expect(out.timingsMs.total).toBeGreaterThanOrEqual(0);
   });
 
   test("annotate before recordStage still produces a candidate", () => {
-    const t = new Tracer();
+    const t = new SearchTracer();
     t.annotate("sym1", "com.foo.Bar", "class");
     t.recordStage("fts", "sym1", 1, 0.5);
     const out = t.toJSON();
@@ -115,7 +115,7 @@ describe("shouldTrace", () => {
 
 describe("optional-chaining no-op", () => {
   test("undefined tracer is a no-op via ?.", () => {
-    let tracer: Tracer | undefined;
+    let tracer: SearchTracer | undefined;
     tracer?.setQuery("q");
     tracer?.recordStage("fts", "sym", 1, 0.5);
     tracer?.recordTiming("embedding", 10);

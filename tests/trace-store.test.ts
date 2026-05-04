@@ -114,7 +114,7 @@ describe("TraceStore env", () => {
     process.env.YGGDRASIL_TRACE_TTL_SECONDS = "not-a-number";
     try {
       const store = new TraceStore();
-      expect(store.ttl).toBe(300);
+      expect(store.ttl).toBe(600);
     } finally {
       if (orig === undefined) delete process.env.YGGDRASIL_TRACE_TTL_SECONDS;
       else process.env.YGGDRASIL_TRACE_TTL_SECONDS = orig;
@@ -126,7 +126,7 @@ describe("TraceStore env", () => {
     process.env.YGGDRASIL_TRACE_TTL_SECONDS = "-5";
     try {
       const store = new TraceStore();
-      expect(store.ttl).toBe(300);
+      expect(store.ttl).toBe(600);
     } finally {
       if (orig === undefined) delete process.env.YGGDRASIL_TRACE_TTL_SECONDS;
       else process.env.YGGDRASIL_TRACE_TTL_SECONDS = orig;

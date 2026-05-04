@@ -56,15 +56,27 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 
 ## Tracing
 
-Pointer-mode tracing on the `search` tool. When enabled, the tool result ends with a trailing `yggdrasil-trace-url: http://127.0.0.1:<port>/api/trace/<id>` line. The trace itself is held in an in-memory TTL store and fetched out-of-band via `GET /api/trace/<id>`. Mirrors huginn's pattern; consumed by muninn.
+Pointer-mode tracing for the four pipeline tools (`search`, `impact`, `search_pattern`, `detect_changes`). When enabled, the tool result ends with a trailing `yggdrasil-trace-url: http://127.0.0.1:<port>/api/trace/<id>` line. The trace itself is held in an in-memory TTL store and fetched out-of-band via `GET /api/trace/<id>`. Mirrors huginn's pattern; consumed by muninn.
+
+Per-tool trace coverage:
+
+| Tool | Traced? | Schema variant | Why |
+|------|---------|----------------|-----|
+| `search` | yes | `TraceSearchV1` | Hybrid retrieval pipeline (FTS + semantic + name → RRF → final) |
+| `impact` | yes | `TraceImpactV1` | BFS hop counts, confidence buckets, top results |
+| `search_pattern` | yes | `TracePatternV1` | rg invocation, per-repo match counts, pre-trim totals |
+| `detect_changes` | yes | `TraceDetectChangesV1` | Diff stats, per-file symbol extraction, blast radius per changed symbol |
+| `symbol_context`, `read_source`, `file_outline`, `list_files`, `list_repos` | no | — | Single-step deterministic queries; nothing to surface |
+
+`TraceV1` is a discriminated union over the four variants plus a `TraceGenericV1` escape hatch (discriminator `shape: "generic"`) used for any future tool that ships before getting a typed shape.
 
 Env flags:
 
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `YGGDRASIL_TRACE_POINTER` | off | Master switch. Set to `1` to enable any tracing (zero overhead when off). |
-| `YGGDRASIL_TRACE_DEFAULT` | off | Set to `1` to record a trace on every `search` call without callers passing `trace: true`. Requires the master switch. |
-| `YGGDRASIL_TRACE_TTL_SECONDS` | `300` | How long stored traces are fetchable. |
+| `YGGDRASIL_TRACE_DEFAULT` | off | Set to `1` to record a trace on every traced tool call without callers passing `trace: true`. Requires the master switch. |
+| `YGGDRASIL_TRACE_TTL_SECONDS` | `600` | How long stored traces are fetchable. |
 
 Run with traces:
 
@@ -72,7 +84,7 @@ Run with traces:
 YGGDRASIL_TRACE_POINTER=1 YGGDRASIL_TRACE_DEFAULT=1 bun run dev
 ```
 
-See `src/tracing/trace.ts` for the `TraceV1` schema and `src/tracing/trace-store.ts` for the store + pointer-line helper.
+See `src/tracing/trace.ts` for the `TraceV1` union and per-tool tracer classes, and `src/tracing/trace-store.ts` for the store + pointer-line helper.
 
 ## Conventions
 

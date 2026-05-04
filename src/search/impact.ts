@@ -1,5 +1,6 @@
 import { findSymbolByQualifiedName } from "../db/symbols.ts";
 import { getImpact as getImpactEdges } from "../db/edges.ts";
+import type { ImpactTracer } from "../tracing/trace.ts";
 
 export interface ImpactResult {
   symbol: {
@@ -32,35 +33,83 @@ function confidenceScore(depth: number, edgeKind: string): number {
   return Math.min(1.0, base + structuralBoost);
 }
 
+const CONFIDENCE_BUCKETS: Array<{ min: number; max: number }> = [
+  { min: 0.8, max: 1.0 },
+  { min: 0.6, max: 0.8 },
+  { min: 0.4, max: 0.6 },
+  { min: 0.2, max: 0.4 },
+  { min: 0.0, max: 0.2 },
+];
+
 /** Analyze blast radius for a symbol. */
 export async function analyzeImpact(
   qualifiedName: string,
-  options?: { repo?: string; maxDepth?: number },
+  options?: { repo?: string; maxDepth?: number; tracer?: ImpactTracer },
 ): Promise<ImpactResult | null> {
   const maxDepth = options?.maxDepth ?? 3;
+  const tracer = options?.tracer;
+  tracer?.setQuery(qualifiedName, maxDepth, options?.repo);
 
-  // Find the target symbol
+  const tLookupStart = performance.now();
   const symbols = await findSymbolByQualifiedName(qualifiedName, options?.repo);
+  tracer?.recordTiming("lookup", performance.now() - tLookupStart);
   if (symbols.length === 0) return null;
 
   const target = symbols[0];
+  tracer?.setStart(target.id, target.qualified_name, target.kind);
 
-  // Get transitive incoming edges
+  const tTraversalStart = performance.now();
   const raw = await getImpactEdges(target.id, maxDepth);
+  tracer?.recordTiming("traversal", performance.now() - tTraversalStart);
 
-  const affected: ImpactEntry[] = raw.map((r) => ({
-    name: r.name,
-    qualified_name: r.qualified_name,
-    kind: r.kind,
-    file_path: r.file_path,
-    repo_name: r.repo_name,
-    depth: r.depth,
-    edge_kind: r.edge_kind,
-    confidence: confidenceScore(r.depth, r.edge_kind),
+  if (tracer) {
+    const hopCounts = new Map<number, number>();
+    for (const r of raw) hopCounts.set(r.depth, (hopCounts.get(r.depth) ?? 0) + 1);
+    [...hopCounts.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .forEach(([depth, count]) => tracer.recordHop(depth, count));
+  }
+
+  const tScoringStart = performance.now();
+  // Keep raw alongside ImpactEntry so the trace can reference symbol IDs without
+  // leaking them into the public ImpactEntry shape.
+  const scored = raw.map((r) => ({
+    id: r.id,
+    entry: {
+      name: r.name,
+      qualified_name: r.qualified_name,
+      kind: r.kind,
+      file_path: r.file_path,
+      repo_name: r.repo_name,
+      depth: r.depth,
+      edge_kind: r.edge_kind,
+      confidence: confidenceScore(r.depth, r.edge_kind),
+    } as ImpactEntry,
   }));
+  scored.sort((a, b) => b.entry.confidence - a.entry.confidence || a.entry.depth - b.entry.depth);
+  const affected = scored.map((s) => s.entry);
+  tracer?.recordTiming("scoring", performance.now() - tScoringStart);
 
-  // Sort by confidence desc, then depth asc
-  affected.sort((a, b) => b.confidence - a.confidence || a.depth - b.depth);
+  if (tracer) {
+    for (const bucket of CONFIDENCE_BUCKETS) {
+      const count = scored.filter((s) => {
+        const c = s.entry.confidence;
+        // Top bucket [0.8, 1.0] is closed on the right; others half-open [min, max).
+        return bucket.max === 1.0 ? c >= bucket.min && c <= bucket.max : c >= bucket.min && c < bucket.max;
+      }).length;
+      tracer.recordConfidenceBucket(bucket.min, bucket.max, count);
+    }
+    tracer.setFinal(
+      affected.length,
+      scored.map((s) => ({
+        symbolId: s.id,
+        qualifiedName: s.entry.qualified_name,
+        kind: s.entry.kind,
+        depth: s.entry.depth,
+        confidence: s.entry.confidence,
+      })),
+    );
+  }
 
   return {
     symbol: {

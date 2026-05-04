@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-const DEFAULT_TTL_SECONDS = 300;
+const DEFAULT_TTL_SECONDS = 600;
 const DEFAULT_MAX_ENTRIES = 10_000;
 
 function ttlFromEnv(fallback = DEFAULT_TTL_SECONDS): number {
