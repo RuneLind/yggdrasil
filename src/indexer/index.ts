@@ -4,6 +4,7 @@ import { extractSymbols, buildQualifiedNames, toSymbolInserts } from "./symbol-e
 import { extractCallGraph } from "./call-graph.ts";
 import { storeImports, resolveImports, deleteImportEdges } from "./import-resolver.ts";
 import { resolveAndStoreEdges } from "./edge-resolver.ts";
+import { embedSymbols } from "./embedder.ts";
 import { upsertRepo, updateRepoCommit } from "../db/repos.ts";
 import { upsertFile, deleteFileData, deleteStaleFiles } from "../db/files.ts";
 import { insertSymbolsBatch, getRepoSymbolCount } from "../db/symbols.ts";
@@ -16,12 +17,16 @@ export interface IndexResult {
   changedFiles: number;
   totalSymbols: number;
   totalEdges: number;
+  embeddedSymbols: number;
+  embeddingFailures: number;
   durationMs: number;
 }
 
 export interface IndexOptions {
   /** Force full re-index: drop all existing data for this repo before indexing. */
   full?: boolean;
+  /** Skip embedding generation (e.g. for fast iteration during development). */
+  skipEmbeddings?: boolean;
 }
 
 /** Index a repository — full or incremental based on content hashes. */
@@ -159,6 +164,23 @@ export async function indexRepo(
     }
   }
 
+  // ── Phase 3: Embed any symbols that don't have an embedding yet ──
+  // Idempotent — covers freshly-inserted symbols on incremental runs and any
+  // pre-existing gaps from interrupted prior runs. Skip with --no-embed for
+  // fast iteration; backfill afterwards with `bun run embed`.
+  let embeddedSymbols = 0;
+  let embeddingFailures = 0;
+  if (!options.skipEmbeddings) {
+    const embed = await embedSymbols(repo.id);
+    embeddedSymbols = embed.embedded;
+    embeddingFailures = embed.failed;
+    if (embeddedSymbols > 0 || embeddingFailures > 0) {
+      console.log(
+        `[yggdrasil] Embedded ${embeddedSymbols} symbols (${embeddingFailures} failed) in ${embed.durationMs}ms`,
+      );
+    }
+  }
+
   const headCommit = await getHeadCommit(config.path);
   if (headCommit) {
     await updateRepoCommit(repo.id, headCommit);
@@ -177,6 +199,8 @@ export async function indexRepo(
     changedFiles,
     totalSymbols,
     totalEdges,
+    embeddedSymbols,
+    embeddingFailures,
     durationMs,
   };
 }

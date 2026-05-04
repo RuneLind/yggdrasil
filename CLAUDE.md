@@ -18,7 +18,9 @@ Named after the Norse world tree connecting all realms — companion to [Muninn]
 ```bash
 bun install
 bun run db:migrate          # Apply schema
-bun run index <repo-path>   # Index a codebase
+bun run index <repo-path>   # Index a codebase (parses, extracts symbols, embeds)
+bun run index --no-embed <repo-path>   # Skip embedding for fast iteration
+bun run embed               # Backfill embeddings for any symbols missing one
 bun run dev                 # MCP server with --watch
 bun run start               # MCP server (production)
 ```
@@ -38,7 +40,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 3. **Symbol extraction** — Tree-sitter Query API, extract classes/methods/functions/interfaces
 4. **Import resolution** — Java packages, Kotlin, TS relative paths → symbol references
 5. **Call graph** — extract call expressions, resolve to target symbols, create edges
-6. **Embeddings** — embed qualified_name + signature + doc_comment (384-dim)
+6. **Embeddings** — at end of `indexRepo`, embed every symbol in the repo that doesn't have an embedding yet (qualified_name + signature + doc_comment, 384-dim). Idempotent; skip with `--no-embed` and backfill later via `bun run embed`. Without embeddings, semantic search is dead and any multi-word natural-language `search` query returns `[]`.
 
 ### MCP tools
 
@@ -129,7 +131,8 @@ src/
 │   ├── symbol-extractor.ts  — extract symbols from AST per language
 │   ├── import-resolver.ts   — resolve imports to symbol references
 │   ├── call-graph.ts        — extract call expressions → edges
-│   └── embedder.ts          — batch embedding generation
+│   ├── edge-resolver.ts     — resolve calls + inheritance → ci_edges
+│   └── embedder.ts          — end-of-repo batch embedding (idempotent)
 ├── search/
 │   ├── hybrid-search.ts     — RRF over FTS + semantic + name match
 │   ├── impact.ts            — blast radius traversal

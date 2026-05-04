@@ -9,6 +9,11 @@ export interface CiRepo {
   created_at: Date;
 }
 
+export interface CiRepoWithStats extends CiRepo {
+  total_symbols: number;
+  embedded_symbols: number;
+}
+
 export async function upsertRepo(
   name: string,
   path: string,
@@ -31,6 +36,30 @@ export async function getRepo(name: string): Promise<CiRepo | undefined> {
 
 export async function listRepos(): Promise<CiRepo[]> {
   return sql<CiRepo[]>`SELECT * FROM ci_repos ORDER BY name`;
+}
+
+/**
+ * List repos with symbol/embedding counts. Use this for `list_repos` so a
+ * degraded index (e.g. embedded_symbols == 0) is visible at a glance.
+ */
+export async function listReposWithStats(): Promise<CiRepoWithStats[]> {
+  return sql<CiRepoWithStats[]>`
+    SELECT
+      r.*,
+      coalesce(stats.total_symbols, 0)::int    AS total_symbols,
+      coalesce(stats.embedded_symbols, 0)::int AS embedded_symbols
+    FROM ci_repos r
+    LEFT JOIN (
+      SELECT
+        f.repo_id,
+        count(*)             AS total_symbols,
+        count(s.embedding)   AS embedded_symbols
+      FROM ci_symbols s
+      JOIN ci_files f ON f.id = s.file_id
+      GROUP BY f.repo_id
+    ) stats ON stats.repo_id = r.id
+    ORDER BY r.name
+  `;
 }
 
 export async function updateRepoCommit(

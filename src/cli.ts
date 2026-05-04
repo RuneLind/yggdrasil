@@ -13,21 +13,31 @@ async function main() {
     case "index": {
       const target = positional[0];
       const full = flags.has("--full");
+      const skipEmbeddings = flags.has("--no-embed");
       if (!target) {
         const configs = await loadRepoConfigs();
         if (configs.length === 0) {
-          console.error("Usage: bun run src/cli.ts index [--full] <repo-path>");
+          console.error("Usage: bun run src/cli.ts index [--full] [--no-embed] <repo-path>");
           console.error("  or create a repos.json with repo configurations");
           process.exit(1);
         }
         for (const config of configs) {
-          await indexRepo(config, { full });
+          await indexRepo(config, { full, skipEmbeddings });
         }
       } else {
         const name = positional[1];
         const config = repoConfigFromArgs(target, name);
-        await indexRepo(config, { full });
+        await indexRepo(config, { full, skipEmbeddings });
       }
+      break;
+    }
+
+    case "embed": {
+      const { embedSymbols } = await import("./indexer/embedder.ts");
+      const result = await embedSymbols();
+      console.log(
+        `[yggdrasil] Done. Embedded ${result.embedded} symbols (${result.failed} failed) in ${result.durationMs}ms`,
+      );
       break;
     }
 
@@ -53,9 +63,10 @@ async function main() {
       console.log("Yggdrasil — Code Intelligence Engine");
       console.log("");
       console.log("Commands:");
-      console.log("  index [--full] <repo-path> [name]  Index a codebase (--full forces re-index)");
-      console.log("  index [--full]                     Index all repos from repos.json");
-      console.log("  search <query>                     Search indexed symbols");
+      console.log("  index [--full] [--no-embed] <repo-path> [name]  Index a codebase");
+      console.log("  index [--full] [--no-embed]                     Index all repos from repos.json");
+      console.log("  embed                                           Backfill embeddings for all symbols");
+      console.log("  search <query>                                  Search indexed symbols");
       console.log("");
       console.log("MCP server:");
       console.log("  bun run start              Start MCP server (port 9130)");
