@@ -1,7 +1,7 @@
 import { sql } from "../db/connection.ts";
 import { generateEmbedding } from "../embeddings.ts";
 import { toVectorLiteral } from "../db/symbols.ts";
-import type { SearchTracer, TraceSearchTiming } from "../tracing/trace.ts";
+import { timed, type SearchTracer } from "../tracing/trace.ts";
 
 export interface SearchResult {
   id: string;
@@ -34,22 +34,13 @@ export async function hybridSearch(
   const candidateLimit = 30;
   const tracer = options?.tracer;
 
-  const timed = <T>(label: TraceSearchTiming, p: Promise<T>): Promise<T> => {
-    if (!tracer) return p;
-    const t = performance.now();
-    return p.then((r) => {
-      tracer.recordTiming(label, performance.now() - t);
-      return r;
-    });
-  };
-
   tracer?.setQuery(query, {
     repo: options?.repo,
     kind: options?.kind,
     language: options?.language,
   });
 
-  const embedding = await timed("embedding", generateEmbedding(query));
+  const embedding = await timed(tracer, "embedding", generateEmbedding(query));
   const embeddingStr = embedding ? toVectorLiteral(embedding) : null;
 
   const repoFilter = options?.repo ? sql`AND r.name = ${options.repo}` : sql``;
@@ -57,7 +48,7 @@ export async function hybridSearch(
   const langFilter = options?.language ? sql`AND f.language = ${options.language}` : sql``;
   const filters = sql`${repoFilter} ${kindFilter} ${langFilter}`;
 
-  const ftsPromise = timed("fts", sql<{ id: string; rank: number }[]>`
+  const ftsPromise = timed(tracer, "fts", sql<{ id: string; rank: number }[]>`
     SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('simple', ${query})) as rank
     FROM ci_symbols s
     JOIN ci_files f ON f.id = s.file_id
@@ -69,7 +60,7 @@ export async function hybridSearch(
   `);
 
   const semanticPromise = embeddingStr
-    ? timed("semantic", sql<{ id: string; rank: number }[]>`
+    ? timed(tracer, "semantic", sql<{ id: string; rank: number }[]>`
         SELECT s.id, 1 - (s.embedding <=> ${embeddingStr}::vector) as rank
         FROM ci_symbols s
         JOIN ci_files f ON f.id = s.file_id
@@ -81,7 +72,7 @@ export async function hybridSearch(
       `)
     : Promise.resolve([] as { id: string; rank: number }[]);
 
-  const namePromise = timed("name", sql<{ id: string; rank: number }[]>`
+  const namePromise = timed(tracer, "name", sql<{ id: string; rank: number }[]>`
     SELECT s.id,
       CASE
         WHEN s.name = ${query} THEN 1.0

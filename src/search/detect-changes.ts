@@ -1,7 +1,7 @@
 import { sql } from "../db/connection.ts";
 import { getRepo } from "../db/repos.ts";
 import { analyzeImpact } from "./impact.ts";
-import type { DetectChangesTracer } from "../tracing/trace.ts";
+import { timed, type DetectChangesTracer } from "../tracing/trace.ts";
 
 export interface ChangedSymbol {
   id: string;
@@ -15,7 +15,7 @@ export interface ChangeDetectionResult {
   repo: string;
   ref: string;
   changedFiles: string[];
-  changedSymbols: Omit<ChangedSymbol, "id">[];
+  changedSymbols: ChangedSymbol[];
   affectedSymbols: {
     name: string;
     qualified_name: string;
@@ -33,7 +33,7 @@ interface DiffSummary {
   removedLines: number;
 }
 
-/** Parse git diff to get changed files, added line ranges, and total added/removed line counts. */
+/** Parse git diff for changed files, added line ranges, and total added/removed counts. */
 async function getChangedLines(repoPath: string, ref?: string): Promise<DiffSummary> {
   const args = ref
     ? ["git", "diff", ref, "--unified=0", "--no-color"]
@@ -72,17 +72,16 @@ async function getChangedLines(repoPath: string, ref?: string): Promise<DiffSumm
 /** Detect which indexed symbols overlap with git changes, then compute impact. */
 export async function detectChanges(
   repoName: string,
-  ref?: string,
-  tracer?: DetectChangesTracer,
+  options?: { ref?: string; tracer?: DetectChangesTracer },
 ): Promise<ChangeDetectionResult | null> {
+  const ref = options?.ref;
+  const tracer = options?.tracer;
   tracer?.setQuery(repoName, ref);
 
   const repo = await getRepo(repoName);
   if (!repo) return null;
 
-  const tDiffStart = performance.now();
-  const diff = await getChangedLines(repo.path, ref);
-  tracer?.recordTiming("diff", performance.now() - tDiffStart);
+  const diff = await timed(tracer, "diff", getChangedLines(repo.path, ref));
   tracer?.setDiff(diff.files.size, diff.addedLines, diff.removedLines);
 
   const changedFiles = [...diff.files.keys()];
@@ -98,7 +97,6 @@ export async function detectChanges(
     };
   }
 
-  // Find symbols in changed files that overlap with changed lines
   const tSymbolStart = performance.now();
   const changedSymbols: ChangedSymbol[] = [];
 
@@ -127,7 +125,6 @@ export async function detectChanges(
   }
   tracer?.recordTiming("symbolResolution", performance.now() - tSymbolStart);
 
-  // Compute impact for each changed symbol
   const tImpactStart = performance.now();
   const affectedMap = new Map<string, ChangeDetectionResult["affectedSymbols"][0]>();
 
@@ -162,7 +159,7 @@ export async function detectChanges(
     repo: repoName,
     ref: ref ?? "working tree",
     changedFiles,
-    changedSymbols: changedSymbols.map(({ id: _id, ...rest }) => rest),
+    changedSymbols,
     affectedSymbols,
   };
 }

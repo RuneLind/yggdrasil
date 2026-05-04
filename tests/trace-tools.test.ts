@@ -90,7 +90,6 @@ describe("PatternTracer", () => {
     expect(out.query.pattern).toBe("BigDecimal\\.ZERO");
     expect(out.query.repo).toBe("melosys-api");
     expect(out.query.pathGlob).toBe("*.kt");
-    expect(out.invocation.repoCount).toBe(2);
     expect(out.invocation.repos).toEqual(["melosys-api", "melosys-eessi"]);
     expect(out.invocation.rgArgs).toContain("--glob");
     expect(out.perRepo).toEqual([

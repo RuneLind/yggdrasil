@@ -1,19 +1,12 @@
 export const TRACE_SCHEMA_VERSION = 1;
 
-// =============================================================================
-// Discriminated union over per-tool trace shapes.
+// `tool` doubles as the discriminator on typed variants. TraceGenericV1 carries
+// a separate `shape: "generic"` field so TS narrowing stays clean even if a
+// generic tracer's `tool` happens to collide with a typed variant's name.
 //
-// The `tool` field on typed variants doubles as the discriminator. Any tool not
-// covered by a typed variant uses TraceGenericV1, which carries a separate
-// `shape: "generic"` discriminator so TypeScript can narrow cleanly even when
-// the generic `tool` happens to equal a typed one (which it shouldn't, but TS
-// can't prove that).
-//
-// Note: the `tool` value is the bare yggdrasil tool name ("search", "impact",
-// "search_pattern", "detect_changes") — NOT the MCP-prefixed form
-// ("mcp__yggdrasil__search" / "yggdrasil-search"). Connector-side renderers
+// `tool` is the bare yggdrasil tool name ("search", "impact", "search_pattern",
+// "detect_changes") — NOT the MCP-prefixed form. Connector-side renderers
 // canonicalise prefixes before dispatching to per-tool panels.
-// =============================================================================
 
 export type TraceV1 =
   | TraceSearchV1
@@ -21,6 +14,33 @@ export type TraceV1 =
   | TracePatternV1
   | TraceDetectChangesV1
   | TraceGenericV1;
+
+abstract class BaseTracer<TLabel extends string> {
+  protected readonly tStart = performance.now();
+  protected readonly timings: Partial<Record<TLabel, number>> = {};
+
+  recordTiming(label: TLabel, ms: number): void {
+    this.timings[label] = Math.round(ms);
+  }
+
+  protected buildTimings(): Partial<Record<TLabel, number>> & { total: number } {
+    return { ...this.timings, total: Math.round(performance.now() - this.tStart) };
+  }
+}
+
+/** Wrap a promise to record its duration on the tracer when present. Zero overhead when tracer is undefined. */
+export function timed<TLabel extends string, T>(
+  tracer: BaseTracer<TLabel> | undefined,
+  label: TLabel,
+  p: Promise<T>,
+): Promise<T> {
+  if (!tracer) return p;
+  const t = performance.now();
+  return p.then((r) => {
+    tracer.recordTiming(label, performance.now() - t);
+    return r;
+  });
+}
 
 // -----------------------------------------------------------------------------
 // search
@@ -51,12 +71,10 @@ interface SearchCandidateRecord {
   stages: Partial<Record<TraceSearchStage, { rank: number; score: number }>>;
 }
 
-export class SearchTracer {
-  private readonly tStart = performance.now();
+export class SearchTracer extends BaseTracer<TraceSearchTiming> {
   private queryRaw = "";
   private queryFilters: { repo?: string; kind?: string; language?: string } | undefined;
   private readonly candidates = new Map<string, SearchCandidateRecord>();
-  private readonly timings: Partial<Record<TraceSearchTiming, number>> = {};
 
   setQuery(raw: string, filters?: { repo?: string; kind?: string; language?: string }): void {
     this.queryRaw = raw;
@@ -75,10 +93,6 @@ export class SearchTracer {
     c.kind = kind;
   }
 
-  recordTiming(label: TraceSearchTiming, ms: number): void {
-    this.timings[label] = Math.round(ms);
-  }
-
   toJSON(): TraceSearchV1 {
     const candidates = [...this.candidates.entries()].map(([symbolId, c]) => ({
       symbolId,
@@ -91,7 +105,7 @@ export class SearchTracer {
       tool: "search",
       query: { raw: this.queryRaw },
       candidates,
-      timingsMs: { ...this.timings, total: Math.round(performance.now() - this.tStart) },
+      timingsMs: this.buildTimings(),
     };
     if (this.queryFilters) trace.query.filters = this.queryFilters;
     return trace;
@@ -133,15 +147,13 @@ export interface TraceImpactV1 {
 
 const IMPACT_TOP_RESULTS_CAP = 20;
 
-export class ImpactTracer {
-  private readonly tStart = performance.now();
+export class ImpactTracer extends BaseTracer<TraceImpactTiming> {
   private query: TraceImpactV1["query"] = { qualifiedName: "", maxDepth: 0 };
   private start: TraceImpactV1["start"] = null;
   private readonly hops: TraceImpactV1["hops"] = [];
   private readonly confidenceBuckets: TraceImpactV1["confidenceBuckets"] = [];
   private finalCount = 0;
   private readonly topResults: TraceImpactV1["topResults"] = [];
-  private readonly timings: Partial<Record<TraceImpactTiming, number>> = {};
 
   setQuery(qualifiedName: string, maxDepth: number, repo?: string): void {
     this.query = { qualifiedName, maxDepth };
@@ -163,11 +175,9 @@ export class ImpactTracer {
   setFinal(count: number, top: TraceImpactV1["topResults"]): void {
     this.finalCount = count;
     this.topResults.length = 0;
-    this.topResults.push(...top.slice(0, IMPACT_TOP_RESULTS_CAP));
-  }
-
-  recordTiming(label: TraceImpactTiming, ms: number): void {
-    this.timings[label] = Math.round(ms);
+    for (let i = 0; i < top.length && i < IMPACT_TOP_RESULTS_CAP; i++) {
+      this.topResults.push(top[i]);
+    }
   }
 
   toJSON(): TraceImpactV1 {
@@ -180,7 +190,7 @@ export class ImpactTracer {
       confidenceBuckets: this.confidenceBuckets.map((b) => ({ ...b })),
       finalCount: this.finalCount,
       topResults: this.topResults.map((r) => ({ ...r })),
-      timingsMs: { ...this.timings, total: Math.round(performance.now() - this.tStart) },
+      timingsMs: this.buildTimings(),
     };
   }
 }
@@ -203,7 +213,6 @@ export interface TracePatternV1 {
   };
   invocation: {
     rgArgs: string[];
-    repoCount: number;
     repos: string[];
   };
   perRepo: Array<{ repo: string; matchCount: number }>;
@@ -211,28 +220,22 @@ export interface TracePatternV1 {
   timingsMs: Partial<Record<TracePatternTiming, number>> & { total: number };
 }
 
-export class PatternTracer {
-  private readonly tStart = performance.now();
+export class PatternTracer extends BaseTracer<TracePatternTiming> {
   private query: TracePatternV1["query"] = {
     pattern: "",
     maxResults: 0,
     contextLines: 0,
   };
-  private invocation: TracePatternV1["invocation"] = {
-    rgArgs: [],
-    repoCount: 0,
-    repos: [],
-  };
+  private invocation: TracePatternV1["invocation"] = { rgArgs: [], repos: [] };
   private readonly perRepo = new Map<string, number>();
   private totals: TracePatternV1["totals"] = { preTrim: 0, returned: 0, truncated: false };
-  private readonly timings: Partial<Record<TracePatternTiming, number>> = {};
 
   setQuery(query: TracePatternV1["query"]): void {
     this.query = { ...query };
   }
 
   setInvocation(rgArgs: string[], repos: string[]): void {
-    this.invocation = { rgArgs: [...rgArgs], repoCount: repos.length, repos: [...repos] };
+    this.invocation = { rgArgs: [...rgArgs], repos: [...repos] };
   }
 
   incrementRepoMatch(repo: string): void {
@@ -243,23 +246,15 @@ export class PatternTracer {
     this.totals = { preTrim, returned, truncated };
   }
 
-  recordTiming(label: TracePatternTiming, ms: number): void {
-    this.timings[label] = Math.round(ms);
-  }
-
   toJSON(): TracePatternV1 {
     return {
       schemaVersion: TRACE_SCHEMA_VERSION,
       tool: "search_pattern",
       query: { ...this.query },
-      invocation: {
-        rgArgs: [...this.invocation.rgArgs],
-        repoCount: this.invocation.repoCount,
-        repos: [...this.invocation.repos],
-      },
+      invocation: { rgArgs: [...this.invocation.rgArgs], repos: [...this.invocation.repos] },
       perRepo: [...this.perRepo.entries()].map(([repo, matchCount]) => ({ repo, matchCount })),
       totals: { ...this.totals },
-      timingsMs: { ...this.timings, total: Math.round(performance.now() - this.tStart) },
+      timingsMs: this.buildTimings(),
     };
   }
 }
@@ -285,14 +280,12 @@ export interface TraceDetectChangesV1 {
   timingsMs: Partial<Record<TraceDetectChangesTiming, number>> & { total: number };
 }
 
-export class DetectChangesTracer {
-  private readonly tStart = performance.now();
+export class DetectChangesTracer extends BaseTracer<TraceDetectChangesTiming> {
   private query: TraceDetectChangesV1["query"] = { repo: "" };
   private diff: TraceDetectChangesV1["diff"] = { fileCount: 0, addedLines: 0, removedLines: 0 };
   private readonly symbolsExtracted: TraceDetectChangesV1["symbolsExtracted"] = [];
   private readonly impactExpansion: TraceDetectChangesV1["impactExpansion"] = [];
   private totals: TraceDetectChangesV1["totals"] = { changedSymbols: 0, affected: 0 };
-  private readonly timings: Partial<Record<TraceDetectChangesTiming, number>> = {};
 
   setQuery(repo: string, ref?: string): void {
     this.query = { repo };
@@ -315,10 +308,6 @@ export class DetectChangesTracer {
     this.totals = { changedSymbols, affected };
   }
 
-  recordTiming(label: TraceDetectChangesTiming, ms: number): void {
-    this.timings[label] = Math.round(ms);
-  }
-
   toJSON(): TraceDetectChangesV1 {
     return {
       schemaVersion: TRACE_SCHEMA_VERSION,
@@ -328,7 +317,7 @@ export class DetectChangesTracer {
       symbolsExtracted: this.symbolsExtracted.map((s) => ({ ...s })),
       impactExpansion: this.impactExpansion.map((i) => ({ ...i })),
       totals: { ...this.totals },
-      timingsMs: { ...this.timings, total: Math.round(performance.now() - this.tStart) },
+      timingsMs: this.buildTimings(),
     };
   }
 }
@@ -345,13 +334,12 @@ export interface TraceGenericV1 {
   timingsMs: Record<string, number> & { total: number };
 }
 
-export class GenericTracer {
-  private readonly tStart = performance.now();
+export class GenericTracer extends BaseTracer<string> {
   private readonly toolName: string;
   private readonly events: TraceGenericV1["events"] = [];
-  private readonly timings: Record<string, number> = {};
 
   constructor(toolName: string) {
+    super();
     this.toolName = toolName;
   }
 
@@ -362,17 +350,13 @@ export class GenericTracer {
     this.events.push(ev);
   }
 
-  recordTiming(label: string, ms: number): void {
-    this.timings[label] = Math.round(ms);
-  }
-
   toJSON(): TraceGenericV1 {
     return {
       schemaVersion: TRACE_SCHEMA_VERSION,
       shape: "generic",
       tool: this.toolName,
       events: this.events.map((e) => ({ ...e })),
-      timingsMs: { ...this.timings, total: Math.round(performance.now() - this.tStart) },
+      timingsMs: this.buildTimings() as Record<string, number> & { total: number },
     };
   }
 }

@@ -17,6 +17,13 @@ import {
 } from "../tracing/trace.ts";
 import { defaultTraceStore, pointerModeEnabled, tracePointerLine } from "../tracing/trace-store.ts";
 
+const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
+
+/** Construct a tracer iff tracing is requested and pointer mode is enabled (the only supported wire format). */
+function gateTracer<T>(traceArg: boolean | undefined, ctor: () => T): T | undefined {
+  return shouldTrace(traceArg) && pointerModeEnabled() ? ctor() : undefined;
+}
+
 /** Stash a trace and return the pointer line to append to a tool's text output. */
 function maybeAppendTracePointer(tracer: { toJSON(): unknown } | undefined): string {
   if (!tracer) return "";
@@ -24,7 +31,10 @@ function maybeAppendTracePointer(tracer: { toJSON(): unknown } | undefined): str
   return tracePointerLine(traceId, PORT);
 }
 
-const PORT = parseInt(process.env.YGGDRASIL_PORT ?? "9130", 10);
+/** JSON-stringify the payload, append the optional trace pointer line, wrap as a text response. */
+function jsonResponseWithTrace(data: unknown, tracer: { toJSON(): unknown } | undefined) {
+  return textResponse(JSON.stringify(data, null, 2) + maybeAppendTracePointer(tracer));
+}
 
 /** Convert a simple glob pattern to SQL LIKE: * → %, ? → _, ** → % */
 function globToLike(glob: string): string {
@@ -63,10 +73,9 @@ server.tool(
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
   async ({ query, repo, kind, language, limit, trace }) => {
-    // Pointer mode is the only supported wire format, so it gates recording too.
-    const tracer = shouldTrace(trace) && pointerModeEnabled() ? new SearchTracer() : undefined;
+    const tracer = gateTracer(trace, () => new SearchTracer());
     const results = await hybridSearch(query, { repo, kind, language, limit, tracer });
-    return textResponse(JSON.stringify(results, null, 2) + maybeAppendTracePointer(tracer));
+    return jsonResponseWithTrace(results, tracer);
   },
 );
 
@@ -119,12 +128,12 @@ server.tool(
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
   async ({ qualified_name, repo, max_depth, trace }) => {
-    const tracer = shouldTrace(trace) && pointerModeEnabled() ? new ImpactTracer() : undefined;
+    const tracer = gateTracer(trace, () => new ImpactTracer());
     const result = await analyzeImpact(qualified_name, { repo, maxDepth: max_depth, tracer });
     if (!result) {
       return textResponse(`No symbol found matching: ${qualified_name}` + maybeAppendTracePointer(tracer));
     }
-    return textResponse(JSON.stringify(result, null, 2) + maybeAppendTracePointer(tracer));
+    return jsonResponseWithTrace(result, tracer);
   },
 );
 
@@ -137,10 +146,10 @@ server.tool(
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
   async ({ repo, ref, trace }) => {
-    const tracer = shouldTrace(trace) && pointerModeEnabled() ? new DetectChangesTracer() : undefined;
-    const result = await detectChanges(repo, ref, tracer);
+    const tracer = gateTracer(trace, () => new DetectChangesTracer());
+    const result = await detectChanges(repo, { ref, tracer });
     if (!result) return textResponse(`Repository not found: ${repo}` + maybeAppendTracePointer(tracer));
-    return textResponse(JSON.stringify(result, null, 2) + maybeAppendTracePointer(tracer));
+    return jsonResponseWithTrace(result, tracer);
   },
 );
 
@@ -222,15 +231,14 @@ server.tool(
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
   async ({ pattern, repo, path_glob, max_results = 20, context_lines = 2, trace }) => {
-    const tracer = shouldTrace(trace) && pointerModeEnabled() ? new PatternTracer() : undefined;
-    const queryShape = {
+    const tracer = gateTracer(trace, () => new PatternTracer());
+    tracer?.setQuery({
       pattern,
       ...(repo !== undefined ? { repo } : {}),
       ...(path_glob !== undefined ? { pathGlob: path_glob } : {}),
       maxResults: max_results,
       contextLines: context_lines,
-    };
-    tracer?.setQuery(queryShape);
+    });
 
     let repos: { name: string; path: string }[];
     if (repo) {
@@ -255,11 +263,7 @@ server.tool(
     args.push(pattern, ...repos.map(r => r.path));
 
     const tRgStart = performance.now();
-    const proc = Bun.spawn(["rg", ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
+    const proc = Bun.spawn(["rg", ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -272,7 +276,6 @@ server.tool(
       return textResponse(`ripgrep error (exit ${proc.exitCode}): ${stderr.trim()}` + maybeAppendTracePointer(tracer));
     }
 
-    // Parse ripgrep JSON lines
     const matches: {
       repo: string;
       path: string;
@@ -287,52 +290,44 @@ server.tool(
       .map(r => [r.path, r.name] as const)
       .sort((a, b) => b[0].length - a[0].length);
 
+    const repoNameForFilePath = (filePath: string): string => {
+      const repoEntry = repoPaths.find(([rp]) => filePath.startsWith(rp));
+      return repoEntry?.[1] ?? "unknown";
+    };
+
+    const lines = stdout.split("\n");
+    const tParseStart = performance.now();
     let pendingContext: string[] = [];
     let currentMatch: typeof matches[0] | null = null;
     let preTrimMatchCount = 0;
-    let collectingMatches = true;
-    const tParseStart = performance.now();
+    let i = 0;
 
-    for (const line of stdout.split("\n")) {
+    // Phase 1: collect up to max_results matches; break on cap (original fast path).
+    for (; i < lines.length; i++) {
+      const line = lines[i];
       if (!line.trim()) continue;
       let msg: any;
       try { msg = JSON.parse(line); } catch { continue; }
 
       if (msg.type === "context") {
-        if (!collectingMatches) continue;
         const text = msg.data?.lines?.text?.trimEnd() ?? "";
-        if (currentMatch) {
-          currentMatch.context_after.push(text);
-        } else {
-          pendingContext.push(text);
-        }
+        if (currentMatch) currentMatch.context_after.push(text);
+        else pendingContext.push(text);
       } else if (msg.type === "match") {
-        // Always count for the trace, even after the matches[] cap is hit.
         preTrimMatchCount += 1;
-        if (tracer) {
-          const filePath: string = msg.data?.path?.text ?? "";
-          const repoEntry = repoPaths.find(([rp]) => filePath.startsWith(rp));
-          tracer.incrementRepoMatch(repoEntry?.[1] ?? "unknown");
-        }
+        const filePath: string = msg.data?.path?.text ?? "";
+        const repoName = repoNameForFilePath(filePath);
+        tracer?.incrementRepoMatch(repoName);
 
-        if (!collectingMatches) continue;
-
-        // Flush previous match
         if (currentMatch) {
           matches.push(currentMatch);
-          if (matches.length >= max_results) {
-            collectingMatches = false;
-            currentMatch = null;
-            continue;
-          }
+          currentMatch = null;
+          if (matches.length >= max_results) { i++; break; }
         }
-
-        const filePath: string = msg.data?.path?.text ?? "";
         const repoEntry = repoPaths.find(([rp]) => filePath.startsWith(rp));
         const relPath = repoEntry ? filePath.slice(repoEntry[0].length + 1) : filePath;
-
         currentMatch = {
-          repo: repoEntry?.[1] ?? "unknown",
+          repo: repoName,
           path: relPath,
           line: msg.data?.line_number ?? 0,
           content: (msg.data?.lines?.text ?? "").trimEnd(),
@@ -341,35 +336,37 @@ server.tool(
         };
         pendingContext = [];
       } else if (msg.type === "end" || msg.type === "begin") {
-        if (!collectingMatches) continue;
-        // Flush on file boundary
         if (currentMatch) {
           matches.push(currentMatch);
-          if (matches.length >= max_results) {
-            collectingMatches = false;
-            currentMatch = null;
-            continue;
-          }
           currentMatch = null;
+          if (matches.length >= max_results) { i++; break; }
         }
         pendingContext = [];
       }
     }
-    // Flush last match
-    if (currentMatch && matches.length < max_results) {
-      matches.push(currentMatch);
+    if (currentMatch && matches.length < max_results) matches.push(currentMatch);
+
+    // Phase 2: when tracing, scan remaining lines to count any uncounted matches.
+    // Cheap substring prefilter avoids JSON.parse on context/begin/end events.
+    if (tracer) {
+      for (; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.startsWith('{"type":"match"')) continue;
+        let msg: any;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.type !== "match") continue;
+        preTrimMatchCount += 1;
+        tracer.incrementRepoMatch(repoNameForFilePath(msg.data?.path?.text ?? ""));
+      }
     }
+
     tracer?.recordTiming("parse", performance.now() - tParseStart);
     tracer?.setTotals(preTrimMatchCount, matches.length, preTrimMatchCount > matches.length);
 
     if (matches.length === 0) {
       return textResponse(`No matches found for pattern: ${pattern}` + maybeAppendTracePointer(tracer));
     }
-
-    return textResponse(
-      JSON.stringify({ pattern, total_matches: matches.length, matches }, null, 2) +
-        maybeAppendTracePointer(tracer),
-    );
+    return jsonResponseWithTrace({ pattern, total_matches: matches.length, matches }, tracer);
   },
 );
 
