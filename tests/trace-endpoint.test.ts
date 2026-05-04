@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { TraceStore, tracePointerLine } from "../src/tracing/trace-store.ts";
-import { Tracer } from "../src/tracing/trace.ts";
+import { SearchTracer } from "../src/tracing/trace.ts";
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 let store: TraceStore;
@@ -32,7 +32,7 @@ afterAll(() => {
 
 describe("/api/trace/<id> endpoint", () => {
   test("round-trip: put a tracer's JSON, fetch it back unchanged", async () => {
-    const tracer = new Tracer();
+    const tracer = new SearchTracer();
     tracer.setQuery("hva er LA_BUC_02", { repo: "melosys-eessi" });
     tracer.recordStage("fts", "sym1", 1, 0.42);
     tracer.recordStage("semantic", "sym1", 3, 0.88);
@@ -58,7 +58,7 @@ describe("/api/trace/<id> endpoint", () => {
   });
 
   test("get is non-consumptive: same id can be fetched twice", async () => {
-    const tracer = new Tracer();
+    const tracer = new SearchTracer();
     tracer.setQuery("retry me");
     const id = store.put(tracer.toJSON());
     const a = await fetch(`${baseUrl}/api/trace/${id}`);
