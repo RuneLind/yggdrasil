@@ -1,4 +1,5 @@
 import { indexRepo } from "./indexer/index.ts";
+import { embedSymbols } from "./indexer/embedder.ts";
 import { hybridSearch } from "./search/hybrid-search.ts";
 import { loadRepoConfigs, repoConfigFromArgs } from "./config.ts";
 import { closeDb } from "./db/connection.ts";
@@ -33,7 +34,6 @@ async function main() {
     }
 
     case "embed": {
-      const { embedSymbols } = await import("./indexer/embedder.ts");
       const result = await embedSymbols();
       console.log(
         `[yggdrasil] Done. Embedded ${result.embedded} symbols (${result.failed} failed) in ${result.durationMs}ms`,

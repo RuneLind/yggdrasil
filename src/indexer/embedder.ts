@@ -13,14 +13,7 @@ export interface EmbedResult {
   durationMs: number;
 }
 
-/**
- * Generate embeddings for every symbol in `repoId` (or every repo when omitted)
- * that doesn't already have one. Idempotent — safe to re-run.
- *
- * The embedding model is warmed up once per call (~hundreds of ms cold) and
- * reused for the whole batch loop, so per-call overhead is amortised across
- * symbols.
- */
+/** Idempotent — safe to re-run. Scoped to `repoId` when provided. */
 export async function embedSymbols(repoId?: string): Promise<EmbedResult> {
   const start = performance.now();
   await warmupEmbeddings();

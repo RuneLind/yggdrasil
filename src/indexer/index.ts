@@ -17,8 +17,9 @@ export interface IndexResult {
   changedFiles: number;
   totalSymbols: number;
   totalEdges: number;
-  embeddedSymbols: number;
-  embeddingFailures: number;
+  /** Embeddings generated this call (not total coverage). 0 on incremental runs with no new symbols. */
+  newEmbeddings: number;
+  newEmbeddingFailures: number;
   durationMs: number;
 }
 
@@ -165,18 +166,16 @@ export async function indexRepo(
   }
 
   // ── Phase 3: Embed any symbols that don't have an embedding yet ──
-  // Idempotent — covers freshly-inserted symbols on incremental runs and any
-  // pre-existing gaps from interrupted prior runs. Skip with --no-embed for
-  // fast iteration; backfill afterwards with `bun run embed`.
-  let embeddedSymbols = 0;
-  let embeddingFailures = 0;
+  // Idempotent — also picks up gaps from interrupted prior runs.
+  let newEmbeddings = 0;
+  let newEmbeddingFailures = 0;
   if (!options.skipEmbeddings) {
     const embed = await embedSymbols(repo.id);
-    embeddedSymbols = embed.embedded;
-    embeddingFailures = embed.failed;
-    if (embeddedSymbols > 0 || embeddingFailures > 0) {
+    newEmbeddings = embed.embedded;
+    newEmbeddingFailures = embed.failed;
+    if (newEmbeddings > 0 || newEmbeddingFailures > 0) {
       console.log(
-        `[yggdrasil] Embedded ${embeddedSymbols} symbols (${embeddingFailures} failed) in ${embed.durationMs}ms`,
+        `[yggdrasil] Embedded ${newEmbeddings} symbols (${newEmbeddingFailures} failed) in ${embed.durationMs}ms`,
       );
     }
   }
@@ -199,8 +198,8 @@ export async function indexRepo(
     changedFiles,
     totalSymbols,
     totalEdges,
-    embeddedSymbols,
-    embeddingFailures,
+    newEmbeddings,
+    newEmbeddingFailures,
     durationMs,
   };
 }
