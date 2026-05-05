@@ -164,11 +164,7 @@ server.tool(
     max_depth: z.number().optional().describe("Blast-radius traversal depth per candidate (default 2 — kept lower than `impact` since K candidates are expanded)"),
   },
   async ({ ticket, repo, top_k, max_depth }) => {
-    const result = await analyzeTicket(ticket, {
-      ...(repo !== undefined ? { repo } : {}),
-      ...(top_k !== undefined ? { topK: top_k } : {}),
-      ...(max_depth !== undefined ? { maxDepth: max_depth } : {}),
-    });
+    const result = await analyzeTicket(ticket, { repo, topK: top_k, maxDepth: max_depth });
     return jsonResponse(result);
   },
 );

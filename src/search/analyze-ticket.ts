@@ -1,20 +1,12 @@
 import { hybridSearch, type SearchResult } from "./hybrid-search.ts";
 import { analyzeImpact, type ImpactEntry } from "./impact.ts";
 import { findSymbolByQualifiedName } from "../db/symbols.ts";
-import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
+import { getIncomingEdges, getOutgoingEdges, type EdgeNeighbor } from "../db/edges.ts";
 
 export interface AnalyzeTicketOptions {
   repo?: string;
   topK?: number;
   maxDepth?: number;
-}
-
-interface EdgeRef {
-  kind: string;
-  qualified_name: string;
-  name: string;
-  file_path: string;
-  repo_name: string;
 }
 
 export interface AnalyzedSymbol {
@@ -28,24 +20,27 @@ export interface AnalyzedSymbol {
     visibility: string | null;
     doc_comment: string | null;
   };
-  callers: EdgeRef[];
-  callees: EdgeRef[];
+  callers: EdgeNeighbor[];
+  callees: EdgeNeighbor[];
   inheritance: {
-    extends: EdgeRef[];
-    implements: EdgeRef[];
-    extended_by: EdgeRef[];
-    implemented_by: EdgeRef[];
+    extends: EdgeNeighbor[];
+    implements: EdgeNeighbor[];
+    extended_by: EdgeNeighbor[];
+    implemented_by: EdgeNeighbor[];
   };
   blast_radius: {
     total: number;
     by_repo: Record<string, number>;
     top: ImpactEntry[];
   };
-  affected_tests: ImpactEntry[];
+  affected_tests: {
+    total: number;
+    top: ImpactEntry[];
+  };
 }
 
 export interface AnalyzeTicketResult {
-  ticket: { text: string; repo?: string };
+  ticket: { text: string };
   candidates: SearchResult[];
   symbols: AnalyzedSymbol[];
   summary: {
@@ -56,30 +51,14 @@ export interface AnalyzeTicketResult {
   };
 }
 
-const TOP_BLAST_PER_SYMBOL = 25;
-const MAX_EDGES_PER_BUCKET = 25;
+const MAX_PER_BUCKET = 25;
 
-/** A path is test-like if it lives under a conventional test directory or matches a *Test/*Spec filename. */
 function isTestPath(filePath: string): boolean {
   if (/(^|\/)(test|tests|__tests__|src\/test)\//i.test(filePath)) return true;
   return /(?:Test|Spec|IT)\.(?:java|kt|kts|ts|tsx)$/.test(filePath)
     || /\.(?:test|spec)\.(?:ts|tsx|js|jsx)$/.test(filePath);
 }
 
-function toEdgeRef(e: { kind: string; qualified_name: string; name: string; file_path: string; repo_name: string }): EdgeRef {
-  return {
-    kind: e.kind,
-    qualified_name: e.qualified_name,
-    name: e.name,
-    file_path: e.file_path,
-    repo_name: e.repo_name,
-  };
-}
-
-/**
- * Bundle search → per-symbol context + impact + test filter into one structured response.
- * Pure orchestration over existing primitives; no schema changes, no new DB queries.
- */
 export async function analyzeTicket(
   ticketText: string,
   options?: AnalyzeTicketOptions,
@@ -90,40 +69,30 @@ export async function analyzeTicket(
 
   const candidates = await hybridSearch(ticketText, { repo, limit: topK });
 
-  const symbols: AnalyzedSymbol[] = [];
-  const reposTouched = new Set<string>();
-  let totalBlast = 0;
-  let totalTests = 0;
-
-  for (const c of candidates) {
-    reposTouched.add(c.repo_name);
-
-    const matches = await findSymbolByQualifiedName(c.qualified_name, repo);
-    if (matches.length === 0) continue;
-    const target = matches[0];
-
-    const [incoming, outgoing, impact] = await Promise.all([
-      getIncomingEdges(target.id),
-      getOutgoingEdges(target.id),
+  const perCandidate = await Promise.all(candidates.map(async (c): Promise<AnalyzedSymbol | null> => {
+    const [details, incoming, outgoing, impact] = await Promise.all([
+      findSymbolByQualifiedName(c.qualified_name, repo),
+      getIncomingEdges(c.id),
+      getOutgoingEdges(c.id),
       analyzeImpact(c.qualified_name, { repo, maxDepth }),
     ]);
 
-    const callers = incoming.filter((e) => e.kind === "calls").slice(0, MAX_EDGES_PER_BUCKET).map(toEdgeRef);
-    const callees = outgoing.filter((e) => e.kind === "calls").slice(0, MAX_EDGES_PER_BUCKET).map(toEdgeRef);
-    const ext = outgoing.filter((e) => e.kind === "extends").map(toEdgeRef);
-    const impl = outgoing.filter((e) => e.kind === "implements").map(toEdgeRef);
-    const extBy = incoming.filter((e) => e.kind === "extends").map(toEdgeRef);
-    const implBy = incoming.filter((e) => e.kind === "implements").map(toEdgeRef);
+    const target = details[0];
+    if (!target) return null;
+
+    const callers = incoming.filter((e) => e.kind === "calls").slice(0, MAX_PER_BUCKET);
+    const callees = outgoing.filter((e) => e.kind === "calls").slice(0, MAX_PER_BUCKET);
+    const ext = outgoing.filter((e) => e.kind === "extends").slice(0, MAX_PER_BUCKET);
+    const impl = outgoing.filter((e) => e.kind === "implements").slice(0, MAX_PER_BUCKET);
+    const extBy = incoming.filter((e) => e.kind === "extends").slice(0, MAX_PER_BUCKET);
+    const implBy = incoming.filter((e) => e.kind === "implements").slice(0, MAX_PER_BUCKET);
 
     const affected = impact?.affected ?? [];
     const byRepo: Record<string, number> = {};
     for (const a of affected) byRepo[a.repo_name] = (byRepo[a.repo_name] ?? 0) + 1;
     const tests = affected.filter((a) => isTestPath(a.file_path));
 
-    totalBlast += affected.length;
-    totalTests += tests.length;
-
-    symbols.push({
+    return {
       target: {
         name: target.name,
         qualified_name: target.qualified_name,
@@ -140,14 +109,26 @@ export async function analyzeTicket(
       blast_radius: {
         total: affected.length,
         by_repo: byRepo,
-        top: affected.slice(0, TOP_BLAST_PER_SYMBOL),
+        top: affected.slice(0, MAX_PER_BUCKET),
       },
-      affected_tests: tests.slice(0, TOP_BLAST_PER_SYMBOL),
-    });
+      affected_tests: {
+        total: tests.length,
+        top: tests.slice(0, MAX_PER_BUCKET),
+      },
+    };
+  }));
+
+  const symbols = perCandidate.filter((s): s is AnalyzedSymbol => s !== null);
+  const reposTouched = new Set(candidates.map((c) => c.repo_name));
+  let totalBlast = 0;
+  let totalTests = 0;
+  for (const s of symbols) {
+    totalBlast += s.blast_radius.total;
+    totalTests += s.affected_tests.total;
   }
 
   return {
-    ticket: { text: ticketText, ...(repo ? { repo } : {}) },
+    ticket: { text: ticketText },
     candidates,
     symbols,
     summary: {
