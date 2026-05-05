@@ -4,6 +4,7 @@ import { extractSymbols, buildQualifiedNames, toSymbolInserts } from "./symbol-e
 import { extractCallGraph } from "./call-graph.ts";
 import { storeImports, resolveImports, deleteImportEdges } from "./import-resolver.ts";
 import { resolveAndStoreEdges } from "./edge-resolver.ts";
+import { embedSymbols } from "./embedder.ts";
 import { upsertRepo, updateRepoCommit } from "../db/repos.ts";
 import { upsertFile, deleteFileData, deleteStaleFiles } from "../db/files.ts";
 import { insertSymbolsBatch, getRepoSymbolCount } from "../db/symbols.ts";
@@ -16,12 +17,17 @@ export interface IndexResult {
   changedFiles: number;
   totalSymbols: number;
   totalEdges: number;
+  /** Embeddings generated this call (not total coverage). 0 on incremental runs with no new symbols. */
+  newEmbeddings: number;
+  newEmbeddingFailures: number;
   durationMs: number;
 }
 
 export interface IndexOptions {
   /** Force full re-index: drop all existing data for this repo before indexing. */
   full?: boolean;
+  /** Skip embedding generation (e.g. for fast iteration during development). */
+  skipEmbeddings?: boolean;
 }
 
 /** Index a repository — full or incremental based on content hashes. */
@@ -159,6 +165,21 @@ export async function indexRepo(
     }
   }
 
+  // ── Phase 3: Embed any symbols that don't have an embedding yet ──
+  // Idempotent — also picks up gaps from interrupted prior runs.
+  let newEmbeddings = 0;
+  let newEmbeddingFailures = 0;
+  if (!options.skipEmbeddings) {
+    const embed = await embedSymbols(repo.id);
+    newEmbeddings = embed.embedded;
+    newEmbeddingFailures = embed.failed;
+    if (newEmbeddings > 0 || newEmbeddingFailures > 0) {
+      console.log(
+        `[yggdrasil] Embedded ${newEmbeddings} symbols (${newEmbeddingFailures} failed) in ${embed.durationMs}ms`,
+      );
+    }
+  }
+
   const headCommit = await getHeadCommit(config.path);
   if (headCommit) {
     await updateRepoCommit(repo.id, headCommit);
@@ -177,6 +198,8 @@ export async function indexRepo(
     changedFiles,
     totalSymbols,
     totalEdges,
+    newEmbeddings,
+    newEmbeddingFailures,
     durationMs,
   };
 }

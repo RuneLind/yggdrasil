@@ -6,7 +6,7 @@ import { analyzeImpact } from "../search/impact.ts";
 import { detectChanges } from "../search/detect-changes.ts";
 import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
-import { getRepo, listRepos } from "../db/repos.ts";
+import { getRepo, listRepos, listReposWithStats } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
 import {
   SearchTracer,
@@ -214,9 +214,9 @@ server.tool(
 
 server.tool(
   "list_repos",
-  "List all indexed repositories with their stats",
+  "List all indexed repositories with their stats (incl. embedding coverage)",
   {},
-  async () => jsonResponse(await listRepos()),
+  async () => jsonResponse(await listReposWithStats()),
 );
 
 server.tool(

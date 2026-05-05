@@ -7,6 +7,7 @@
     "start": "bun run src/mcp/server.ts",
     "dev": "bun --watch src/mcp/server.ts",
     "index": "bun run src/cli.ts index",
+    "embed": "bun run src/cli.ts embed",
     "search": "bun run src/cli.ts search",
     "db:migrate": "bun run scripts/migrate.ts",
     "test": "bun test",

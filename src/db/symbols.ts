@@ -96,11 +96,17 @@ export async function updateSymbolEmbedding(
 
 export async function getSymbolsWithoutEmbeddings(
   limit = 100,
+  repoId?: string,
 ): Promise<{ id: string; qualified_name: string; signature: string | null; doc_comment: string | null }[]> {
+  const repoFilter = repoId
+    ? sql`AND f.repo_id = ${repoId}`
+    : sql``;
   return sql`
-    SELECT id, qualified_name, signature, doc_comment
-    FROM ci_symbols
-    WHERE embedding IS NULL
+    SELECT s.id, s.qualified_name, s.signature, s.doc_comment
+    FROM ci_symbols s
+    JOIN ci_files f ON f.id = s.file_id
+    WHERE s.embedding IS NULL
+    ${repoFilter}
     LIMIT ${limit}
   `;
 }
