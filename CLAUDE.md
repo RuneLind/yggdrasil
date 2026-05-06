@@ -50,6 +50,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 | `symbol_context` | 360-degree view: callers, callees, inheritance |
 | `impact` | Blast radius with confidence scoring by depth |
 | `detect_changes` | Git diff → affected symbols and their blast radius |
+| `analyze_ticket` | Ticket text → top candidate symbols, each bundled with caller/callee/inheritance context + blast radius + affected tests. One round-trip orchestration over `search`/`symbol_context`/`impact`. |
 | `file_outline` | All symbols in a file with hierarchy |
 | `read_source` | Read source code of an indexed file with line numbers |
 | `list_repos` | List all indexed repositories |
@@ -68,6 +69,7 @@ Per-tool trace coverage:
 | `impact` | yes | `TraceImpactV1` | BFS hop counts, confidence buckets, top results |
 | `search_pattern` | yes | `TracePatternV1` | rg invocation, per-repo match counts, pre-trim totals |
 | `detect_changes` | yes | `TraceDetectChangesV1` | Diff stats, per-file symbol extraction, blast radius per changed symbol |
+| `analyze_ticket` | no (v1) | — | Composes already-traced primitives; pass `trace: true` to `search` / `impact` directly if needed. A typed `TraceAnalyzeTicketV1` variant can be added later. |
 | `symbol_context`, `read_source`, `file_outline`, `list_files`, `list_repos` | no | — | Single-step deterministic queries; nothing to surface |
 
 `TraceV1` is a discriminated union over the four variants plus a `TraceGenericV1` escape hatch (discriminator `shape: "generic"`) used for any future tool that ships before getting a typed shape.

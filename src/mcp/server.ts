@@ -4,6 +4,7 @@ import { z } from "zod";
 import { hybridSearch } from "../search/hybrid-search.ts";
 import { analyzeImpact } from "../search/impact.ts";
 import { detectChanges } from "../search/detect-changes.ts";
+import { analyzeTicket } from "../search/analyze-ticket.ts";
 import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
 import { getRepo, listRepos, listReposWithStats } from "../db/repos.ts";
@@ -45,7 +46,7 @@ function globToLike(glob: string): string {
     .replace(/\*/g, "%")    // * matches within a segment
     .replace(/\?/g, "_");   // ? matches single char
 }
-const TOOL_COUNT = 9;
+const TOOL_COUNT = 10;
 
 function jsonResponse(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -150,6 +151,21 @@ server.tool(
     const result = await detectChanges(repo, { ref, tracer });
     if (!result) return textResponse(`Repository not found: ${repo}` + maybeAppendTracePointer(tracer));
     return jsonResponseWithTrace(result, tracer);
+  },
+);
+
+server.tool(
+  "analyze_ticket",
+  "Analyze a ticket: search for relevant symbols, then bundle each one's context (callers/callees/inheritance) + blast radius + affected tests into a single structured response. Pure orchestration over search/symbol_context/impact — one round-trip instead of 5–10. Pass the ticket title + description as `ticket`.",
+  {
+    ticket: z.string().describe("Ticket text — title + description (the full natural-language ticket the agent is triaging)"),
+    repo: z.string().optional().describe("Filter to a specific repository"),
+    top_k: z.number().optional().describe("How many candidate symbols to expand with full context (default 5)"),
+    max_depth: z.number().optional().describe("Blast-radius traversal depth per candidate (default 2 — kept lower than `impact` since K candidates are expanded)"),
+  },
+  async ({ ticket, repo, top_k, max_depth }) => {
+    const result = await analyzeTicket(ticket, { repo, topK: top_k, maxDepth: max_depth });
+    return jsonResponse(result);
   },
 );
 

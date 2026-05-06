@@ -43,11 +43,18 @@ export async function insertEdgesInBatches(edges: EdgeInsert[], batchSize = 500)
   }
 }
 
-export async function getIncomingEdges(
-  symbolId: string,
-): Promise<{ source_id: string; kind: string; name: string; qualified_name: string; file_path: string; repo_name: string }[]> {
+export interface EdgeNeighbor {
+  symbol_id: string;
+  kind: EdgeKind;
+  name: string;
+  qualified_name: string;
+  file_path: string;
+  repo_name: string;
+}
+
+export async function getIncomingEdges(symbolId: string): Promise<EdgeNeighbor[]> {
   return sql`
-    SELECT e.source_id, e.kind, s.name, s.qualified_name, f.path as file_path, r.name as repo_name
+    SELECT e.source_id AS symbol_id, e.kind, s.name, s.qualified_name, f.path as file_path, r.name as repo_name
     FROM ci_edges e
     JOIN ci_symbols s ON s.id = e.source_id
     JOIN ci_files f ON f.id = s.file_id
@@ -56,11 +63,9 @@ export async function getIncomingEdges(
   `;
 }
 
-export async function getOutgoingEdges(
-  symbolId: string,
-): Promise<{ target_id: string; kind: string; name: string; qualified_name: string; file_path: string; repo_name: string }[]> {
+export async function getOutgoingEdges(symbolId: string): Promise<EdgeNeighbor[]> {
   return sql`
-    SELECT e.target_id, e.kind, s.name, s.qualified_name, f.path as file_path, r.name as repo_name
+    SELECT e.target_id AS symbol_id, e.kind, s.name, s.qualified_name, f.path as file_path, r.name as repo_name
     FROM ci_edges e
     JOIN ci_symbols s ON s.id = e.target_id
     JOIN ci_files f ON f.id = s.file_id
