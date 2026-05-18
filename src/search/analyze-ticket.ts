@@ -53,12 +53,6 @@ export interface AnalyzeTicketResult {
 
 const MAX_PER_BUCKET = 25;
 
-function isTestPath(filePath: string): boolean {
-  if (/(^|\/)(test|tests|__tests__|src\/test)\//i.test(filePath)) return true;
-  return /(?:Test|Spec|IT)\.(?:java|kt|kts|ts|tsx)$/.test(filePath)
-    || /\.(?:test|spec)\.(?:ts|tsx|js|jsx)$/.test(filePath);
-}
-
 export async function analyzeTicket(
   ticketText: string,
   options?: AnalyzeTicketOptions,
@@ -90,7 +84,7 @@ export async function analyzeTicket(
     const affected = impact?.affected ?? [];
     const byRepo: Record<string, number> = {};
     for (const a of affected) byRepo[a.repo_name] = (byRepo[a.repo_name] ?? 0) + 1;
-    const tests = affected.filter((a) => isTestPath(a.file_path));
+    const tests = affected.filter((a) => a.archetype === "test");
 
     return {
       target: {

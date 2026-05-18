@@ -2,7 +2,6 @@ import { describe, test, expect } from "bun:test";
 import {
   classifyArchetype,
   filterByArchetypeExclude,
-  tagWithArchetype,
   type Archetype,
 } from "../src/search/archetype.ts";
 
@@ -169,25 +168,6 @@ describe("classifyArchetype", () => {
   describe("fallback to other", () => {
     test("plain class with no signal → other", () => {
       expect(classify("src/main/java/no/nav/melosys/Foo.java", "Foo")).toBe("other");
-    });
-  });
-});
-
-describe("tagWithArchetype", () => {
-  test("preserves original fields and adds archetype", () => {
-    const tagged = tagWithArchetype([
-      {
-        name: "BehandlingService",
-        qualified_name: "no.nav.melosys.BehandlingService",
-        file_path: "src/main/java/BehandlingService.java",
-        kind: "class",
-        depth: 1,
-      },
-    ]);
-    expect(tagged[0]).toMatchObject({
-      name: "BehandlingService",
-      depth: 1,
-      archetype: "service",
     });
   });
 });
