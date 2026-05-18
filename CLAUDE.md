@@ -48,9 +48,9 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 |------|---------|
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg → pointer-mode trace (see Tracing below) |
 | `symbol_context` | 360-degree view: callers, callees, inheritance |
-| `impact` | Blast radius with confidence scoring by depth |
-| `detect_changes` | Git diff → affected symbols and their blast radius |
-| `analyze_ticket` | Ticket text → top candidate symbols, each bundled with caller/callee/inheritance context + blast radius + affected tests. One round-trip orchestration over `search`/`symbol_context`/`impact`. |
+| `impact` | Blast radius with confidence scoring by depth. Each result is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/config/util/builder/exception/other) via name+path heuristics. Optional `archetype_exclude` arg trims noise; `archetype_counts` on the response shows the pre-filter distribution. |
+| `detect_changes` | Git diff → affected symbols and their blast radius (inherits archetype tagging via `impact`) |
+| `analyze_ticket` | Ticket text → top candidate symbols, each bundled with caller/callee/inheritance context + blast radius + affected tests. One round-trip orchestration over `search`/`symbol_context`/`impact` (inherits archetype tagging). |
 | `file_outline` | All symbols in a file with hierarchy |
 | `read_source` | Read source code of an indexed file with line numbers |
 | `list_repos` | List all indexed repositories |
@@ -138,6 +138,8 @@ src/
 ├── search/
 │   ├── hybrid-search.ts     — RRF over FTS + semantic + name match
 │   ├── impact.ts            — blast radius traversal
+│   ├── archetype.ts         — name+path heuristics for arketype-tagging impact results
+│   ├── analyze-ticket.ts    — ticket → candidate symbols + context bundle
 │   └── detect-changes.ts    — git diff → affected symbols
 ├── db/
 │   ├── connection.ts        — postgres connection
