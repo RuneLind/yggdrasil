@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { hybridSearch } from "../search/hybrid-search.ts";
 import { analyzeImpact } from "../search/impact.ts";
+import { ARCHETYPES } from "../search/archetype.ts";
 import { detectChanges } from "../search/detect-changes.ts";
 import { analyzeTicket } from "../search/analyze-ticket.ts";
 import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
@@ -121,16 +122,27 @@ server.tool(
 
 server.tool(
   "impact",
-  "Analyze blast radius: what code is transitively affected if this symbol changes?",
+  "Analyze blast radius: what code is transitively affected if this symbol changes? Each result is tagged with an archetype (controller/service/mapper/dto/entity/repository/test/config/util/builder/exception/other) so the agent can filter or prioritize. `archetype_counts` shows the pre-filter distribution.",
   {
     qualified_name: z.string().describe("Fully qualified symbol name"),
     repo: z.string().optional().describe("Filter to a specific repository"),
     max_depth: z.number().optional().describe("Max traversal depth (default 3)"),
+    archetype_exclude: z
+      .array(z.enum(ARCHETYPES))
+      .optional()
+      .describe(
+        "Drop entries whose archetype is in this list. Common: ['test'] to skip test fixtures, ['test','controller'] to skip thin controllers too.",
+      ),
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
-  async ({ qualified_name, repo, max_depth, trace }) => {
+  async ({ qualified_name, repo, max_depth, archetype_exclude, trace }) => {
     const tracer = gateTracer(trace, () => new ImpactTracer());
-    const result = await analyzeImpact(qualified_name, { repo, maxDepth: max_depth, tracer });
+    const result = await analyzeImpact(qualified_name, {
+      repo,
+      maxDepth: max_depth,
+      tracer,
+      archetypeExclude: archetype_exclude,
+    });
     if (!result) {
       return textResponse(`No symbol found matching: ${qualified_name}` + maybeAppendTracePointer(tracer));
     }

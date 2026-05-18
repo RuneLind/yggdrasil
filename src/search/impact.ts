@@ -1,6 +1,7 @@
 import { findSymbolByQualifiedName } from "../db/symbols.ts";
 import { getImpact as getImpactEdges } from "../db/edges.ts";
 import { timed, type ImpactTracer } from "../tracing/trace.ts";
+import { classifyArchetype, filterByArchetypeExclude, type Archetype } from "./archetype.ts";
 
 export interface ImpactResult {
   symbol: {
@@ -9,8 +10,10 @@ export interface ImpactResult {
     kind: string;
     file_path: string;
     repo_name: string;
+    archetype: Archetype;
   };
   affected: ImpactEntry[];
+  archetype_counts: Partial<Record<Archetype, number>>;
 }
 
 export interface ImpactEntry {
@@ -23,6 +26,7 @@ export interface ImpactEntry {
   depth: number;
   edge_kind: string;
   confidence: number;
+  archetype: Archetype;
 }
 
 /** Confidence scoring by depth. Structural edges (extends/implements) get a boost. */
@@ -45,7 +49,7 @@ const CONFIDENCE_BUCKETS: Array<{ min: number; max: number }> = [
 /** Analyze blast radius for a symbol. */
 export async function analyzeImpact(
   qualifiedName: string,
-  options?: { repo?: string; maxDepth?: number; tracer?: ImpactTracer },
+  options?: { repo?: string; maxDepth?: number; tracer?: ImpactTracer; archetypeExclude?: Archetype[] },
 ): Promise<ImpactResult | null> {
   const maxDepth = options?.maxDepth ?? 3;
   const tracer = options?.tracer;
@@ -68,7 +72,7 @@ export async function analyzeImpact(
   }
 
   const tScoringStart = performance.now();
-  const affected: ImpactEntry[] = raw.map((r) => ({
+  const taggedAll: ImpactEntry[] = raw.map((r) => ({
     id: r.id,
     name: r.name,
     qualified_name: r.qualified_name,
@@ -78,7 +82,17 @@ export async function analyzeImpact(
     depth: r.depth,
     edge_kind: r.edge_kind,
     confidence: confidenceScore(r.depth, r.edge_kind),
+    archetype: classifyArchetype(r),
   }));
+
+  // Compute archetype distribution over the pre-filter set so callers can see what
+  // got excluded (vital for "why did my filter return 0 hits?" diagnostics).
+  const archetype_counts: Partial<Record<Archetype, number>> = {};
+  for (const e of taggedAll) {
+    archetype_counts[e.archetype] = (archetype_counts[e.archetype] ?? 0) + 1;
+  }
+
+  const affected = filterByArchetypeExclude(taggedAll, options?.archetypeExclude);
   affected.sort((a, b) => b.confidence - a.confidence || a.depth - b.depth);
   tracer?.recordTiming("scoring", performance.now() - tScoringStart);
 
@@ -111,7 +125,9 @@ export async function analyzeImpact(
       kind: target.kind,
       file_path: target.file_path,
       repo_name: target.repo_name,
+      archetype: classifyArchetype(target),
     },
     affected,
+    archetype_counts,
   };
 }
