@@ -22,5 +22,11 @@
     "path": "/Users/rune/source/nav/melosys-web",
     "languages": ["typescript", "tsx"],
     "exclude": ["**/node_modules/**", "**/dist/**", "**/.next/**", "**/build/**"]
+  },
+  {
+    "name": "melosys-dokgen",
+    "path": "/Users/rune/source/nav/melosys-dokgen",
+    "languages": ["java", "kotlin"],
+    "exclude": ["**/build/**", "**/target/**", "**/generated/**"]
   }
 ]
