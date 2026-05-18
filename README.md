@@ -122,14 +122,15 @@ erDiagram
 
 ### MCP tools
 
-The server exposes 9 tools over streamable HTTP on port 9130:
+The server exposes 10 tools over streamable HTTP on port 9130:
 
 | Tool | Description | Example use |
 |------|-------------|-------------|
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg attaches a trace pointer URL — see [Tracing](#tracing). | "Find code related to payment processing" |
 | `symbol_context` | 360-degree view of a symbol: callers, callees, inheritance | "What calls this method? What does it extend?" |
-| `impact` | Blast radius — what breaks if this symbol changes? Optional `trace` arg. | "If I change Behandling, what's affected?" |
-| `detect_changes` | Map a git diff to affected symbols + their blast radius. Optional `trace` arg. | "What's the impact of this PR?" |
+| `impact` | Blast radius — what breaks if this symbol changes? Each result is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/…) so an agent can filter the noise with `archetype_exclude`. Optional `trace` arg. | "If I change Behandling, what's affected? (excluding tests and controllers)" |
+| `detect_changes` | Map a git diff to affected symbols + their blast radius (inherits archetype tagging). Optional `trace` arg. | "What's the impact of this PR?" |
+| `analyze_ticket` | One round-trip orchestration over `search` → `symbol_context` → `impact` per top candidate. Returns ticket → top symbols + caller/callee/inheritance + blast radius (archetype-tagged) + affected tests. | "Analyze this Jira ticket and tell me what to touch" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
 | `read_source` | Read source code of an indexed file with line numbers | "Show me lines 30-60 of BehandlingService.java" |
 | `list_repos` | List all indexed repositories with metadata | "What repos are indexed?" |
@@ -345,7 +346,9 @@ src/
 │   └── edge-resolver.ts      Resolve calls → symbol IDs
 ├── search/
 │   ├── hybrid-search.ts      RRF over FTS + semantic + name
-│   ├── impact.ts             Blast radius (recursive CTE)
+│   ├── impact.ts             Blast radius (recursive CTE) + archetype tagging
+│   ├── archetype.ts          Name+path heuristics → archetype classification
+│   ├── analyze-ticket.ts     Ticket → candidate symbols + context bundle
 │   └── detect-changes.ts     Git diff → affected symbols
 ├── db/
 │   ├── connection.ts         Postgres pool
