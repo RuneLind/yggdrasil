@@ -328,18 +328,18 @@
 <h2><span class="section-num">3</span>Pipeline — before and after</h2>
 <div class="mermaid" id="diag-pipeline">
 graph LR
-    subgraph Before
-        A1[symbol qualified_name] --> B1[analyzeImpact<br/>recursive CTE]
-        B1 --> C1[856 entries]
-        C1 --> D1{{LLM manually<br/>triages}}
+    subgraph BEFORE ["Before"]
+        A1["symbol qualified_name"] --> B1["analyzeImpact<br/>recursive CTE"]
+        B1 --> C1["856 entries"]
+        C1 --> D1{{"LLM manually triages"}}
     end
-    subgraph After
-        A2[symbol qualified_name] --> B2[analyzeImpact]
-        B2 --> T2[classifyArchetype<br/>per entry]
-        T2 --> F2{archetype_exclude<br/>= [test, controller,<br/>builder, other]?}
-        F2 -->|yes| G2[302 entries]
-        F2 -->|no| H2[856 entries +<br/>archetype tags]
-        G2 --> I2[LLM focuses<br/>on signal]
+    subgraph AFTER ["After"]
+        A2["symbol qualified_name"] --> B2["analyzeImpact"]
+        B2 --> T2["classifyArchetype<br/>per entry"]
+        T2 --> F2{"archetype_exclude set?"}
+        F2 -->|yes| G2["302 entries"]
+        F2 -->|no| H2["856 entries with archetype tags"]
+        G2 --> I2["LLM focuses on signal"]
         H2 --> I2
     end
 </div>
@@ -347,24 +347,23 @@ graph LR
 <h2><span class="section-num">4</span>Classification flow</h2>
 <div class="mermaid" id="diag-classify">
 flowchart TD
-    S[ImpactEntry<br/>name, qualified_name,<br/>file_path, kind] --> T{file_path under<br/>/test/, /tests/,<br/>/__tests__/ ?}
-    T -->|yes| TEST[archetype = test]
-    T -->|no| C[Build candidate list]
-    C --> C1{kind is<br/>class/interface/<br/>enum/object ?}
-    C1 -->|yes| CT[name, qn.last, basename]
-    C1 -->|no| CF[qn.parent, basename, qn.last]
-    CT --> N[Suffix rules<br/>Test, Builder, Controller,<br/>Repository, Service, Mapper,<br/>Dto, Config, Util, Exception]
+    S["ImpactEntry<br/>name, qualified_name, file_path, kind"] --> T{"file_path under /test/, /tests/, /__tests__/ ?"}
+    T -->|yes| TEST["archetype = test"]
+    T -->|no| C["Build candidate list"]
+    C --> C1{"kind is class, interface, enum or object?"}
+    C1 -->|yes| CT["name, qn.last, basename"]
+    C1 -->|no| CF["qn.parent, basename, qn.last"]
+    CT --> N["Suffix rules<br/>Test, Builder, Controller,<br/>Repository, Service, Mapper,<br/>Dto, Config, Util, Exception"]
     CF --> N
-    N -->|match| HIT[archetype = ...]
-    N -->|miss| P[Path-fallback rules<br/>/dto/, /domain/, /repository/,<br/>/controller/, /service/, /mapper/,<br/>/config/, /util/, /exception/]
+    N -->|match| HIT["archetype label"]
+    N -->|miss| P["Path-fallback rules<br/>/dto/, /domain/, /repository/,<br/>/controller/, /service/, /mapper/,<br/>/config/, /util/, /exception/"]
     P -->|match| HIT
-    P -->|miss| O[archetype = other]
+    P -->|miss| O["archetype = other"]
 </div>
 
 <h2><span class="section-num">5</span>Distribution at a glance</h2>
 <div class="mermaid" id="diag-pie">
-pie showData
-    title Archetype distribution for Behandling impact
+pie title Archetype distribution for Behandling impact
     "test" : 385
     "service" : 185
     "other" : 88
