@@ -48,16 +48,39 @@ export async function hybridSearch(
   const langFilter = options?.language ? sql`AND f.language = ${options.language}` : sql``;
   const filters = sql`${repoFilter} ${kindFilter} ${langFilter}`;
 
-  const ftsPromise = timed(tracer, "fts", sql<{ id: string; rank: number }[]>`
-    SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('simple', ${query})) as rank
-    FROM ci_symbols s
-    JOIN ci_files f ON f.id = s.file_id
-    JOIN ci_repos r ON r.id = f.repo_id
-    WHERE s.search_vector @@ plainto_tsquery('simple', ${query})
-    ${filters}
-    ORDER BY rank DESC
-    LIMIT ${candidateLimit}
-  `);
+  // plainto_tsquery ANDs every token — precise for 1–2 word symbol searches, but a
+  // multi-word natural-language query (the kind analyze_ticket sends) returns 0 because
+  // no single symbol's search_vector contains all tokens. When the strict AND yields
+  // nothing, retry once with the same lexed tokens ORed together — swap '&'→'|' in the
+  // parsed tsquery text (plainto only ever emits '&'), so the FTS leg still contributes
+  // instead of silently dropping out and leaving the semantic leg to carry it alone.
+  const ftsPromise = timed(
+    tracer,
+    "fts",
+    (async () => {
+      const andRows = await sql<{ id: string; rank: number }[]>`
+        SELECT s.id, ts_rank(s.search_vector, plainto_tsquery('simple', ${query})) as rank
+        FROM ci_symbols s
+        JOIN ci_files f ON f.id = s.file_id
+        JOIN ci_repos r ON r.id = f.repo_id
+        WHERE s.search_vector @@ plainto_tsquery('simple', ${query})
+        ${filters}
+        ORDER BY rank DESC
+        LIMIT ${candidateLimit}
+      `;
+      if (andRows.length > 0) return andRows;
+      return sql<{ id: string; rank: number }[]>`
+        SELECT s.id, ts_rank(s.search_vector, replace(plainto_tsquery('simple', ${query})::text, '&', '|')::tsquery) as rank
+        FROM ci_symbols s
+        JOIN ci_files f ON f.id = s.file_id
+        JOIN ci_repos r ON r.id = f.repo_id
+        WHERE s.search_vector @@ replace(plainto_tsquery('simple', ${query})::text, '&', '|')::tsquery
+        ${filters}
+        ORDER BY rank DESC
+        LIMIT ${candidateLimit}
+      `;
+    })(),
+  );
 
   const semanticPromise = embeddingStr
     ? timed(tracer, "semantic", sql<{ id: string; rank: number }[]>`
