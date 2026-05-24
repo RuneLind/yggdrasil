@@ -7,7 +7,7 @@ import postgres from "postgres";
  * The fallback in `src/search/hybrid-search.ts` turns a strict-AND tsquery into an
  * all-OR one by swapping '&'→'|' on the *parsed* tsquery text:
  *
- *     replace(plainto_tsquery('simple', $q)::text, '&', '|')::tsquery
+ *     replace(plainto_tsquery('simple', $q)::text, ' & ', ' | ')::tsquery
  *
  * That swap happens inside Postgres (it reuses Postgres's lexing — diacritics,
  * punctuation, stop-words — rather than re-tokenizing in JS), so the unit under
@@ -37,7 +37,7 @@ try {
 
 // Mirrors the swap expression in src/search/hybrid-search.ts.
 const orFallback = (q: string) =>
-  db`SELECT replace(plainto_tsquery('simple', ${q})::text, '&', '|')::tsquery::text AS t`;
+  db`SELECT replace(plainto_tsquery('simple', ${q})::text, ' & ', ' | ')::tsquery::text AS t`;
 
 describe.skipIf(!DB_AVAILABLE)("FTS OR-fallback swap (needs only Postgres)", () => {
   afterAll(async () => {
@@ -70,7 +70,7 @@ describe.skipIf(!DB_AVAILABLE)("FTS OR-fallback swap (needs only Postgres)", () 
       SELECT
         to_tsvector('simple', 'noe tekst om søknad og litt mer') @@ plainto_tsquery('simple', ${q}) AS and_match,
         to_tsvector('simple', 'noe tekst om søknad og litt mer')
-          @@ replace(plainto_tsquery('simple', ${q})::text, '&', '|')::tsquery AS or_match
+          @@ replace(plainto_tsquery('simple', ${q})::text, ' & ', ' | ')::tsquery AS or_match
     `;
     expect(and_match).toBe(false);
     expect(or_match).toBe(true);
