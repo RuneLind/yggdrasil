@@ -82,4 +82,16 @@ describe.skipIf(!DB_AVAILABLE)("FTS OR-fallback swap (needs only Postgres)", () 
     const [{ t }] = await orFallback("behandling");
     expect(t).toBe("'behandling'");
   });
+
+  test("swaps only the AND operator, never a literal '&' inside a lexeme", async () => {
+    // The default tsearch parser emits url/url_path tokens that keep an internal
+    // '&' (here 'example.com/a&b', '/a&b'). A bare replace('&','|') would corrupt
+    // those into different, non-existent lexemes; the space-delimited ' & ' swap
+    // must leave them untouched and only flip the connective to ' | '.
+    const [{ t }] = await orFallback("http://example.com/a&b sak");
+    expect(t).toContain("'example.com/a&b'"); // full-path token intact
+    expect(t).toContain("'/a&b'"); // path token intact
+    expect(t).not.toContain("a|b"); // i.e. NOT corrupted to '…/a|b'
+    expect(t).toContain(" | "); // the AND operator was swapped to OR
+  });
 });

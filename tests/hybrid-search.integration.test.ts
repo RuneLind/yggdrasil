@@ -1,7 +1,7 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { hybridSearch } from "../src/search/hybrid-search.ts";
 import { SearchTracer } from "../src/tracing/trace.ts";
-import { closeDb } from "../src/db/connection.ts";
+import { sql, closeDb } from "../src/db/connection.ts";
 
 /**
  * Integration test for the FTS OR-fallback (F2) in hybrid search.
@@ -36,12 +36,27 @@ describe.skipIf(!RUN)("hybrid search FTS OR-fallback against real melosys-api in
   });
 
   test("FTS leg contributes via the OR-fallback (not the semantic leg alone)", async () => {
+    // First prove the precondition the fallback exists for: the strict-AND FTS
+    // query returns 0 for this NL query (same predicate + repo filter hybridSearch
+    // uses). Without this, the candidate assertion below could pass on an AND hit
+    // and never exercise the fallback at all.
+    const andRows = await sql`
+      SELECT s.id
+      FROM ci_symbols s
+      JOIN ci_files f ON f.id = s.file_id
+      JOIN ci_repos r ON r.id = f.repo_id
+      WHERE s.search_vector @@ plainto_tsquery('simple', ${NL_QUERY})
+        AND r.name = 'melosys-api'
+      LIMIT 1
+    `;
+    expect(andRows.length).toBe(0);
+
     const tracer = new SearchTracer();
     await hybridSearch(NL_QUERY, { repo: "melosys-api", limit: 10, tracer });
     const trace = tracer.toJSON();
     const ftsCandidates = trace.candidates.filter((c) => c.stages.fts);
-    // Strict AND yields 0 for this query, so any FTS candidate proves the OR-fallback
-    // fired. Without F2 this is 0 and the semantic leg carries search alone.
+    // Strict AND is empty (asserted above), so any FTS candidate can only have come
+    // from the OR-fallback. Without F2 this is 0 and the semantic leg carries search.
     expect(ftsCandidates.length).toBeGreaterThan(0);
   });
 });

@@ -71,7 +71,7 @@ export async function hybridSearch(
         JOIN ci_repos r ON r.id = f.repo_id
         WHERE s.search_vector @@ plainto_tsquery('simple', ${query})
         ${filters}
-        ORDER BY rank DESC
+        ORDER BY rank DESC, s.id
         LIMIT ${candidateLimit}
       `;
       if (andRows.length > 0) return andRows;
@@ -82,7 +82,7 @@ export async function hybridSearch(
         JOIN ci_repos r ON r.id = f.repo_id
         WHERE s.search_vector @@ replace(plainto_tsquery('simple', ${query})::text, ' & ', ' | ')::tsquery
         ${filters}
-        ORDER BY rank DESC
+        ORDER BY rank DESC, s.id
         LIMIT ${candidateLimit}
       `;
     })(),
