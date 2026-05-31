@@ -80,6 +80,30 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
   return rows.map((r) => r.id);
 }
 
+/**
+ * Set parent_id for symbols whose parent could only be resolved after insertion.
+ *
+ * Symbols are inserted with parent_id = NULL because a child's parent_id needs the
+ * parent's DB id, which only exists post-insert. This second pass wires them up.
+ * Relies on the same positional contract the edge resolver uses: symbolDbIds[i]
+ * corresponds to the i-th extracted symbol (see buildParentLinks). One round-trip
+ * via a VALUES join; ids are bound as parameters.
+ */
+export async function updateSymbolParents(
+  links: { id: string; parent_id: string }[],
+): Promise<void> {
+  if (links.length === 0) return;
+  const values = links.map((_, i) => `($${i * 2 + 1}::uuid, $${i * 2 + 2}::uuid)`).join(", ");
+  const params = links.flatMap((l) => [l.id, l.parent_id]);
+  await sql.unsafe(
+    `UPDATE ci_symbols AS s
+     SET parent_id = v.parent_id
+     FROM (VALUES ${values}) AS v(id, parent_id)
+     WHERE s.id = v.id`,
+    params,
+  );
+}
+
 export function toVectorLiteral(v: number[]): string {
   return `[${v.join(",")}]`;
 }
@@ -94,12 +118,23 @@ export async function updateSymbolEmbedding(
   );
 }
 
+/**
+ * Fetch a page of symbols missing an embedding, ordered by id and starting after
+ * `afterId` (exclusive). The cursor is what makes the embedder drain loop terminate:
+ * symbols whose embedding generation keeps failing stay NULL, but advancing the cursor
+ * past them means they are never re-fetched, so the loop always makes forward progress
+ * through the id space instead of spinning on the same poison rows forever.
+ */
 export async function getSymbolsWithoutEmbeddings(
   limit = 100,
   repoId?: string,
+  afterId?: string,
 ): Promise<{ id: string; qualified_name: string; signature: string | null; doc_comment: string | null }[]> {
   const repoFilter = repoId
     ? sql`AND f.repo_id = ${repoId}`
+    : sql``;
+  const cursorFilter = afterId
+    ? sql`AND s.id > ${afterId}::uuid`
     : sql``;
   return sql`
     SELECT s.id, s.qualified_name, s.signature, s.doc_comment
@@ -107,6 +142,8 @@ export async function getSymbolsWithoutEmbeddings(
     JOIN ci_files f ON f.id = s.file_id
     WHERE s.embedding IS NULL
     ${repoFilter}
+    ${cursorFilter}
+    ORDER BY s.id
     LIMIT ${limit}
   `;
 }
@@ -116,6 +153,9 @@ export async function findSymbolByQualifiedName(
   repoName?: string,
 ): Promise<(CiSymbol & { file_path: string; repo_name: string })[]> {
   const repoFilter = repoName ? sql`AND r.name = ${repoName}` : sql``;
+  // qualified_name is non-unique (overloads, partial names, multi-repo collisions),
+  // and callers take [0]. ORDER BY makes that pick deterministic across identical
+  // calls instead of relying on Postgres's physical row order.
   return sql`
     SELECT s.*, f.path as file_path, r.name as repo_name
     FROM ci_symbols s
@@ -123,7 +163,28 @@ export async function findSymbolByQualifiedName(
     JOIN ci_repos r ON r.id = f.repo_id
     WHERE s.qualified_name = ${qualifiedName}
     ${repoFilter}
+    ORDER BY r.name, f.path, s.start_line, s.id
   `;
+}
+
+/** Resolve a symbol by its DB id, with file_path + repo_name joined in.
+ *  Lets callers that already hold a concrete id (search candidates) avoid a
+ *  lossy re-resolution by qualified_name.
+ *  Explicit column list (like getSymbolsByFile) so the 384-dim embedding vector and
+ *  the search_vector tsvector — neither in CiSymbol — aren't fetched and discarded. */
+export async function getSymbolById(
+  id: string,
+): Promise<(CiSymbol & { file_path: string; repo_name: string }) | null> {
+  const [row] = await sql<(CiSymbol & { file_path: string; repo_name: string })[]>`
+    SELECT s.id, s.file_id, s.name, s.qualified_name, s.kind, s.parent_id,
+           s.start_line, s.end_line, s.signature, s.doc_comment, s.visibility, s.is_static,
+           f.path as file_path, r.name as repo_name
+    FROM ci_symbols s
+    JOIN ci_files f ON f.id = s.file_id
+    JOIN ci_repos r ON r.id = f.repo_id
+    WHERE s.id = ${id}
+  `;
+  return row ?? null;
 }
 
 export async function getSymbolsByFile(

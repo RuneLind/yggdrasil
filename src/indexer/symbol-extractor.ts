@@ -267,6 +267,29 @@ export function buildQualifiedNames(
   return qualifiedNames;
 }
 
+/**
+ * Map each symbol's in-batch `parentIndex` to its parent's DB id, producing the
+ * (childId, parentId) links for a post-insert parent_id update.
+ *
+ * `symbolDbIds[i]` must correspond to `symbols[i]` — the same positional contract
+ * the edge resolver relies on (insert order == RETURNING order for a single INSERT).
+ * Only symbols that actually have a parent are returned.
+ */
+export function buildParentLinks(
+  symbols: { parentIndex: number | null }[],
+  symbolDbIds: string[],
+): { id: string; parent_id: string }[] {
+  const links: { id: string; parent_id: string }[] = [];
+  for (let i = 0; i < symbols.length; i++) {
+    const parentIndex = symbols[i].parentIndex;
+    if (parentIndex === null) continue;
+    const id = symbolDbIds[i];
+    const parentId = symbolDbIds[parentIndex];
+    if (id && parentId) links.push({ id, parent_id: parentId });
+  }
+  return links;
+}
+
 /** Convert extraction result to SymbolInsert array. Requires file_id and resolved parent DB ids. */
 export function toSymbolInserts(
   result: ExtractionResult,

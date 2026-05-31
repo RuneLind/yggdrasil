@@ -24,21 +24,62 @@ async function getExtractor(): Promise<FeatureExtractionPipeline> {
   return extractor;
 }
 
+/**
+ * Guard the dimension contract: the DB column is a fixed-width pgvector, so a vector
+ * of the wrong length must never be written. Returns null (treated as a failure) on
+ * mismatch instead of letting a wrong-width vector reach the DB.
+ */
+export function validateEmbedding(vec: number[] | null): number[] | null {
+  if (!vec) return null;
+  if (vec.length !== EMBEDDING_DIMS) {
+    console.error(
+      `[yggdrasil] Embedding dim mismatch: model produced ${vec.length}, expected ${EMBEDDING_DIMS}. ` +
+        `Check EMBEDDING_MODEL / EMBEDDING_DIMS and the ci_symbols.embedding column width.`,
+    );
+    return null;
+  }
+  return vec;
+}
+
 export async function generateEmbedding(
   text: string,
 ): Promise<number[] | null> {
   try {
     const ext = await getExtractor();
     const result = await ext(text, { pooling: "mean", normalize: true });
-    return Array.from(result.data as Float32Array);
+    return validateEmbedding(Array.from(result.data as Float32Array));
   } catch (e) {
     console.error("[yggdrasil] Embedding generation failed:", e);
     return null;
   }
 }
 
+let dimsValidated = false;
+
 export async function warmupEmbeddings(): Promise<void> {
-  await getExtractor();
+  // Clear failure for a malformed EMBEDDING_DIMS (e.g. a non-numeric env → NaN) before
+  // loading the model, instead of a confusing "produces 384-dim but EMBEDDING_DIMS=NaN".
+  if (!Number.isInteger(EMBEDDING_DIMS) || EMBEDDING_DIMS <= 0) {
+    throw new Error(
+      `[yggdrasil] EMBEDDING_DIMS must be a positive integer, got ${JSON.stringify(process.env.EMBEDDING_DIMS)}.`,
+    );
+  }
+  const ext = await getExtractor();
+  // Fail fast on a model/config dimension mismatch — once per process. Without this,
+  // EMBEDDING_DIMS is dead config: a model swap silently breaks every write (and pgvector
+  // rejects them) with no signal beyond a per-symbol console.error. Memoized so repeated
+  // embedSymbols calls don't re-run a probe inference.
+  if (dimsValidated) return;
+  const probe = await ext("warmup", { pooling: "mean", normalize: true });
+  const dims = (probe.data as Float32Array).length;
+  if (dims !== EMBEDDING_DIMS) {
+    throw new Error(
+      `[yggdrasil] Model ${EMBEDDING_MODEL} produces ${dims}-dim vectors but EMBEDDING_DIMS=${EMBEDDING_DIMS}. ` +
+        `Set EMBEDDING_DIMS=${dims} (and a migration matching the ci_symbols.embedding column width), ` +
+        `or choose a ${EMBEDDING_DIMS}-dim model.`,
+    );
+  }
+  dimsValidated = true;
 }
 
 /** Build the text used for embedding a symbol — keeps embedding input consistent. */
