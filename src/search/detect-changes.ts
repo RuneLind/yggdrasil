@@ -1,6 +1,7 @@
 import { sql } from "../db/connection.ts";
 import { getRepo } from "../db/repos.ts";
 import { analyzeImpact } from "./impact.ts";
+import { parseGitDiff, type DiffSummary } from "./diff-parse.ts";
 import { timed, type DetectChangesTracer } from "../tracing/trace.ts";
 
 export interface ChangedSymbol {
@@ -27,13 +28,7 @@ export interface ChangeDetectionResult {
   }[];
 }
 
-interface DiffSummary {
-  files: Map<string, Set<number>>;
-  addedLines: number;
-  removedLines: number;
-}
-
-/** Parse git diff for changed files, added line ranges, and total added/removed counts. */
+/** Run `git diff --unified=0` and parse it into changed files + touched line ranges. */
 async function getChangedLines(repoPath: string, ref?: string): Promise<DiffSummary> {
   const args = ref
     ? ["git", "diff", ref, "--unified=0", "--no-color"]
@@ -42,31 +37,7 @@ async function getChangedLines(repoPath: string, ref?: string): Promise<DiffSumm
   const proc = Bun.spawn(args, { cwd: repoPath, stdout: "pipe", stderr: "ignore" });
   const output = await new Response(proc.stdout).text();
 
-  const files = new Map<string, Set<number>>();
-  let addedLines = 0;
-  let removedLines = 0;
-  let currentFile: string | null = null;
-
-  for (const line of output.split("\n")) {
-    if (line.startsWith("+++ b/")) {
-      currentFile = line.slice(6);
-      if (!files.has(currentFile)) files.set(currentFile, new Set());
-    } else if (line.startsWith("@@ ") && currentFile) {
-      // Parse hunk header: @@ -start,count +start,count @@
-      const match = line.match(/@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-      if (match) {
-        const removed = parseInt(match[1] ?? "1", 10);
-        const start = parseInt(match[2], 10);
-        const added = parseInt(match[3] ?? "1", 10);
-        addedLines += added;
-        removedLines += removed;
-        const lines = files.get(currentFile)!;
-        for (let i = start; i < start + added; i++) lines.add(i);
-      }
-    }
-  }
-
-  return { files, addedLines, removedLines };
+  return parseGitDiff(output);
 }
 
 /** Detect which indexed symbols overlap with git changes, then compute impact. */

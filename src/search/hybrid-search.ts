@@ -1,6 +1,7 @@
 import { sql } from "../db/connection.ts";
 import { generateEmbedding } from "../embeddings.ts";
 import { toVectorLiteral } from "../db/symbols.ts";
+import { fuseAndRank } from "./rrf.ts";
 import { timed, type SearchTracer } from "../tracing/trace.ts";
 
 export interface SearchResult {
@@ -132,79 +133,53 @@ export async function hybridSearch(
     nameResults.forEach((r, i) => tracer.recordStage("name", r.id, i + 1, r.rank));
   }
 
-  const tRrfStart = performance.now();
-  const K = 60;
-  const scores = new Map<string, number>();
+  // Kind-boost must see the whole candidate pool *before* the top-`limit` cut, so a
+  // high-value kind (class, 1.5) just below the RRF cutoff isn't permanently buried
+  // under a low-value kind (property, 0.7) just above it. Fetch the candidate pool once
+  // (≤ 3×candidateLimit ids), fuse + boost over all of it, then slice — the details are
+  // already in hand, so no second round-trip for the survivors.
+  const candidateIds = [
+    ...new Set([...ftsResults, ...semanticResults, ...nameResults].map((r) => r.id)),
+  ];
+  if (candidateIds.length === 0) return [];
 
-  const addScores = (results: { id: string; rank: number }[], weight: number) => {
-    results.forEach((r, idx) => {
-      const rrfScore = weight / (K + idx + 1);
-      scores.set(r.id, (scores.get(r.id) ?? 0) + rrfScore);
-    });
-  };
-
-  addScores(ftsResults, 1.0);
-  addScores(semanticResults, 1.0);
-  addScores(nameResults, 1.5);
-
-  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
-  if (tracer) {
-    ranked.forEach(([id, score], i) => tracer.recordStage("rrf", id, i + 1, score));
-    tracer.recordTiming("rrf", performance.now() - tRrfStart);
-  }
-
-  const topIds = ranked.slice(0, limit).map(([id]) => id);
-  if (topIds.length === 0) return [];
-
-  const topIdSet = new Set(topIds);
-
-  const detailsPromise = sql<Omit<SearchResult, "score">[]>`
+  const candidates = await sql<Omit<SearchResult, "score">[]>`
     SELECT s.id, s.name, s.qualified_name, s.kind, s.signature,
            f.path as file_path, r.name as repo_name,
            s.start_line, s.end_line
     FROM ci_symbols s
     JOIN ci_files f ON f.id = s.file_id
     JOIN ci_repos r ON r.id = f.repo_id
-    WHERE s.id = ANY(${topIds})
+    WHERE s.id = ANY(${candidateIds})
   `;
+  const detailById = new Map(candidates.map((c) => [c.id, c]));
+  const kindById = new Map(candidates.map((c) => [c.id, c.kind]));
 
-  // Annotation fetch is in parallel with the wider details query and only pulls
-  // the columns needed for the trace, so the trace-on path stays cheap.
-  const annotateIds = tracer
-    ? ranked.filter(([id]) => !topIdSet.has(id)).map(([id]) => id)
-    : [];
-  const annotatePromise = annotateIds.length
-    ? sql<{ id: string; qualified_name: string; kind: string }[]>`
-        SELECT id, qualified_name, kind FROM ci_symbols WHERE id = ANY(${annotateIds})
-      `
-    : Promise.resolve([] as { id: string; qualified_name: string; kind: string }[]);
-
-  const [details, annotations] = await Promise.all([detailsPromise, annotatePromise]);
+  const tRrfStart = performance.now();
+  const fused = fuseAndRank(
+    [
+      { results: ftsResults, weight: 1.0 },
+      { results: semanticResults, weight: 1.0 },
+      { results: nameResults, weight: 1.5 },
+    ],
+    kindById,
+  );
 
   if (tracer) {
-    for (const d of details) tracer.annotate(d.id, d.qualified_name, d.kind);
-    for (const a of annotations) tracer.annotate(a.id, a.qualified_name, a.kind);
+    fused.rrfRanked.forEach((c, i) => tracer.recordStage("rrf", c.id, i + 1, c.rrfScore));
+    tracer.recordTiming("rrf", performance.now() - tRrfStart);
+    // The candidate fetch already carries qualified_name + kind for every ranked id.
+    for (const c of candidates) tracer.annotate(c.id, c.qualified_name, c.kind);
   }
 
-  const kindBoost: Record<string, number> = {
-    class: 1.5,
-    interface: 1.5,
-    enum: 1.4,
-    method: 1.2,
-    function: 1.2,
-    constructor: 1.1,
-    object: 1.3,
-    type: 1.3,
-    property: 0.7,
-    field: 0.7,
-  };
-
-  const finalResults = details
-    .map((d) => ({
-      ...d,
-      score: (scores.get(d.id) ?? 0) * (kindBoost[d.kind] ?? 1.0),
-    }))
-    .sort((a, b) => b.score - a.score);
+  // fused.boosted is already sorted (score desc, id asc), so the slice preserves order.
+  const finalResults: SearchResult[] = fused.boosted
+    .slice(0, limit)
+    .map((c) => {
+      const d = detailById.get(c.id);
+      return d ? { ...d, score: c.score } : null;
+    })
+    .filter((r): r is SearchResult => r !== null);
 
   if (tracer) {
     finalResults.forEach((r, i) => tracer.recordStage("final", r.id, i + 1, r.score));

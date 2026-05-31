@@ -29,8 +29,14 @@ export interface ImpactEntry {
   archetype: Archetype;
 }
 
-/** Confidence scoring by depth. Structural edges (extends/implements) get a boost. */
-function confidenceScore(depth: number, edgeKind: string): number {
+/**
+ * Confidence scoring by depth. Structural edges (extends/implements) get a boost.
+ * Depth 0 = the changed symbol itself (never present in the blast radius — the
+ * traversal seeds direct callers at depth 1, see getImpact). So in practice the
+ * lowest depth seen here is 1 (direct callers → 0.7); the depth-0 → 1.0 entry stays
+ * to document that the symbol itself would score 1.0.
+ */
+export function confidenceScore(depth: number, edgeKind: string): number {
   const baseScore: Record<number, number> = { 0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2 };
   const base = baseScore[depth] ?? 0.1;
   const structuralBoost =

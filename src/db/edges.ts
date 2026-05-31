@@ -81,10 +81,16 @@ export async function getImpact(
 ): Promise<{ id: string; name: string; qualified_name: string; kind: string; file_path: string; repo_name: string; depth: number; edge_kind: string }[]> {
   return sql`
     WITH RECURSIVE impact AS (
+      -- Direct callers seed at depth 1 (depth 0 is the changed symbol itself), and
+      -- recursing WHERE i.depth < maxDepth yields hops 1..maxDepth — i.e. exactly
+      -- maxDepth hops of callers. (The old seed of 0 yielded 0..maxDepth: one hop too
+      -- deep, and it scored direct callers 1.0 — indistinguishable from the changed
+      -- symbol itself. This change is intentionally both a relabel *and* a one-hop
+      -- reach correction, so maxDepth now means precisely that many caller hops.)
       SELECT
         s.id, s.name, s.qualified_name, s.kind,
         f.path as file_path, r.name as repo_name,
-        0 as depth, e.kind as edge_kind
+        1 as depth, e.kind as edge_kind
       FROM ci_edges e
       JOIN ci_symbols s ON s.id = e.source_id
       JOIN ci_files f ON f.id = s.file_id
