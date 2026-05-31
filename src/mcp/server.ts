@@ -61,14 +61,30 @@ export function resolveSourcePath(repoPath: string, filePath: string): string | 
   return full;
 }
 
-/** Convert a simple glob pattern to SQL LIKE: * → %, ? → _, ** → % */
-function globToLike(glob: string): string {
+/**
+ * Convert a simple glob pattern to a SQL LIKE pattern.
+ *   *   → %  (within a path segment)
+ *   **  → %  (any path depth)
+ *   ?   → _  (single char)
+ * A `**​/` collapses its trailing separator too, so `**​/*Test*` → `%Test%` rather than
+ * `%/%Test%` — the latter would never match a root-level `FooTest.kt`. Literal `%`/`_`
+ * are escaped first, and runs of adjacent wildcards collapse to a single `%`.
+ */
+export function globToLike(glob: string): string {
+  // Map every wildcard to a NUL placeholder so a wildcard-`%` can't be conflated with
+  // an escaped literal `%` (`\%`) when we collapse adjacent wildcards at the end.
+  const W = "\x00";
   return glob
-    .replace(/%/g, "\\%")   // escape existing SQL wildcards
+    .replace(/\\/g, "\\\\")      // escape literal backslashes first (LIKE's escape char);
+                                 // otherwise a trailing `\` is a dangling escape (Postgres
+                                 // 22025 error) and an interior `\` silently drops a char
+    .replace(/%/g, "\\%")        // escape existing SQL wildcards
     .replace(/_/g, "\\_")
-    .replace(/\*\*/g, "%")  // ** matches any path depth
-    .replace(/\*/g, "%")    // * matches within a segment
-    .replace(/\?/g, "_");   // ? matches single char
+    .replace(/\*\*\//g, W)       // **/ absorbs the path separator
+    .replace(/\*\*/g, W)         // bare ** → any depth
+    .replace(/\*/g, W)           // * → within a segment
+    .replace(/\x00+/g, "%")      // collapse runs of wildcards to one %
+    .replace(/\?/g, "_");        // ? → single char
 }
 const TOOL_COUNT = 10;
 

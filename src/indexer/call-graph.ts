@@ -21,6 +21,32 @@ export interface CallGraphResult {
   inheritance: ExtractedInheritance[];
 }
 
+interface CallGraphAdapter {
+  extractCalls(root: SyntaxNode, source: string, calls: ExtractedCall[]): void;
+  extractInheritance(
+    root: SyntaxNode,
+    source: string,
+    extraction: ExtractionResult,
+    inheritance: ExtractedInheritance[],
+  ): void;
+}
+
+// One entry per language with a wired call/inheritance extractor. Keeping the dispatch
+// table-driven (rather than a hardcoded if/else) means a language that's declared
+// SupportedLanguage but has no extractor surfaces as a logged gap below, instead of
+// silently indexing symbols with a permanently empty call graph.
+//
+// TypeScript/tsx are deliberately absent: a useful TS call graph also needs TS import
+// resolution (module-specifier parsing + relative-path resolution), which is a separate
+// piece of work — see the review follow-ups (#18). Until that lands, TS files index
+// their symbols and the warning below makes the missing edges explicit.
+const CALL_GRAPH_ADAPTERS: Partial<Record<SupportedLanguage, CallGraphAdapter>> = {
+  java: { extractCalls: extractJavaCalls, extractInheritance: extractJavaInheritance },
+  kotlin: { extractCalls: extractKotlinCalls, extractInheritance: extractKotlinInheritance },
+};
+
+const warnedMissingExtractor = new Set<SupportedLanguage>();
+
 export function extractCallGraph(
   source: string,
   tree: ReturnType<import("web-tree-sitter").Parser["parse"]>,
@@ -30,13 +56,21 @@ export function extractCallGraph(
   const calls: ExtractedCall[] = [];
   const inheritance: ExtractedInheritance[] = [];
 
-  if (lang === "java") {
-    extractJavaCalls(tree.rootNode, source, calls);
-    extractJavaInheritance(tree.rootNode, source, extraction, inheritance);
-  } else if (lang === "kotlin") {
-    extractKotlinCalls(tree.rootNode, source, calls);
-    extractKotlinInheritance(tree.rootNode, source, extraction, inheritance);
+  const adapter = CALL_GRAPH_ADAPTERS[lang];
+  if (!adapter) {
+    if (!warnedMissingExtractor.has(lang)) {
+      warnedMissingExtractor.add(lang);
+      console.warn(
+        `[call-graph] no call/inheritance extractor for language '${lang}' — its files ` +
+          `index symbols but contribute no call-graph edges (impact/detect_changes will ` +
+          `under-report for them).`,
+      );
+    }
+    return { calls, inheritance };
   }
+
+  adapter.extractCalls(tree.rootNode, source, calls);
+  adapter.extractInheritance(tree.rootNode, source, extraction, inheritance);
 
   return { calls, inheritance };
 }
