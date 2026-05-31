@@ -1,6 +1,6 @@
 import { hybridSearch, type SearchResult } from "./hybrid-search.ts";
-import { analyzeImpact, type ImpactEntry } from "./impact.ts";
-import { findSymbolByQualifiedName } from "../db/symbols.ts";
+import { analyzeImpactBySymbolId, type ImpactEntry } from "./impact.ts";
+import { getSymbolById } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges, type EdgeNeighbor } from "../db/edges.ts";
 
 export interface AnalyzeTicketOptions {
@@ -64,14 +64,16 @@ export async function analyzeTicket(
   const candidates = await hybridSearch(ticketText, { repo, limit: topK });
 
   const perCandidate = await Promise.all(candidates.map(async (c): Promise<AnalyzedSymbol | null> => {
-    const [details, incoming, outgoing, impact] = await Promise.all([
-      findSymbolByQualifiedName(c.qualified_name, repo),
+    // Drive everything off the candidate's concrete id — the edges (getIncoming/Outgoing)
+    // and blast radius then describe the SAME symbol as `target`, instead of re-resolving
+    // by qualified_name and risking a different overload for each.
+    const [target, incoming, outgoing, impact] = await Promise.all([
+      getSymbolById(c.id),
       getIncomingEdges(c.id),
       getOutgoingEdges(c.id),
-      analyzeImpact(c.qualified_name, { repo, maxDepth }),
+      analyzeImpactBySymbolId(c.id, { maxDepth }),
     ]);
 
-    const target = details[0];
     if (!target) return null;
 
     const callers = incoming.filter((e) => e.kind === "calls").slice(0, MAX_PER_BUCKET);

@@ -9,33 +9,52 @@ export interface CiFile {
   indexed_at: Date;
 }
 
-export async function upsertFile(
+/**
+ * Resolve the file row for (repo, path), creating a placeholder for new files, and
+ * report whether its content changed — WITHOUT persisting the new content_hash.
+ *
+ * The hash is the durable "this file is fully indexed" marker, so it must land only
+ * after the file's symbols/imports/edges are stored (see markFileIndexed). New files
+ * are inserted with an empty hash so that a crash before markFileIndexed leaves the
+ * row looking un-indexed (hash mismatch) and it gets re-processed, rather than being
+ * skipped forever as symbol-less.
+ */
+export async function ensureFile(
   repoId: string,
   path: string,
   language: string,
   contentHash: string,
 ): Promise<{ id: string; changed: boolean }> {
-  // Check if file exists and hash matches
   const [existing] = await sql<{ id: string; content_hash: string }[]>`
     SELECT id, content_hash FROM ci_files
     WHERE repo_id = ${repoId} AND path = ${path}
   `;
 
-  if (existing && existing.content_hash === contentHash) {
-    return { id: existing.id, changed: false };
+  if (existing) {
+    return { id: existing.id, changed: existing.content_hash !== contentHash };
   }
 
   const [row] = await sql<{ id: string }[]>`
     INSERT INTO ci_files (repo_id, path, language, content_hash)
-    VALUES (${repoId}, ${path}, ${language}, ${contentHash})
-    ON CONFLICT (repo_id, path) DO UPDATE SET
-      language = ${language},
-      content_hash = ${contentHash},
-      indexed_at = now()
+    VALUES (${repoId}, ${path}, ${language}, '')
     RETURNING id
   `;
 
   return { id: row.id, changed: true };
+}
+
+/** Persist the content_hash (+ language) once a file's symbols/imports/edges are
+ *  durably stored. Until this runs, the file reads as un-indexed and re-processes. */
+export async function markFileIndexed(
+  fileId: string,
+  language: string,
+  contentHash: string,
+): Promise<void> {
+  await sql`
+    UPDATE ci_files
+    SET content_hash = ${contentHash}, language = ${language}, indexed_at = now()
+    WHERE id = ${fileId}
+  `;
 }
 
 export async function deleteFileData(fileId: string): Promise<void> {

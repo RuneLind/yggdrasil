@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { resolve, sep } from "node:path";
 import { z } from "zod";
 import { hybridSearch } from "../search/hybrid-search.ts";
 import { analyzeImpact } from "../search/impact.ts";
@@ -36,6 +37,25 @@ function maybeAppendTracePointer(tracer: { toJSON(): unknown } | undefined): str
 /** JSON-stringify the payload, append the optional trace pointer line, wrap as a text response. */
 function jsonResponseWithTrace(data: unknown, tracer: { toJSON(): unknown } | undefined) {
   return textResponse(JSON.stringify(data, null, 2) + maybeAppendTracePointer(tracer));
+}
+
+/**
+ * Resolve a caller-supplied repo-relative path against the repo root, refusing any
+ * path that *lexically* escapes the root (`../../etc/passwd`, absolute paths, `..`
+ * climbs, sibling-dir prefix collisions). Returns null on escape so the tool can reject
+ * without touching the file. Containment is checked on the normalized absolute path.
+ *
+ * NOTE: this is lexical only — it does NOT resolve symlinks, so a symlink committed
+ * inside the repo that points outside it would still pass. Closing that needs a
+ * realpath check (tracked as a follow-up); the reported caller-input traversal is closed.
+ */
+export function resolveSourcePath(repoPath: string, filePath: string): string | null {
+  const root = resolve(repoPath);
+  const full = resolve(root, filePath);
+  // Must be strictly inside root (root + separator). Equality (full === root) means the
+  // path resolved to the repo dir itself — not a file — so reject that too.
+  if (!full.startsWith(root + sep)) return null;
+  return full;
 }
 
 /** Convert a simple glob pattern to SQL LIKE: * → %, ? → _, ** → % */
@@ -223,9 +243,11 @@ server.tool(
     `;
     if (!repoRow) return textResponse(`Repository not found: ${repoName}`);
 
-    const fullPath = `${repoRow.path}/${filePath}`;
+    const fullPath = resolveSourcePath(repoRow.path, filePath);
+    if (!fullPath) return textResponse(`Path escapes repository: ${filePath}`);
     const file = Bun.file(fullPath);
-    if (!await file.exists()) return textResponse(`File not found: ${fullPath}`);
+    // Report the caller-supplied relative path, never the absolute server path.
+    if (!await file.exists()) return textResponse(`File not found: ${repoName}/${filePath}`);
 
     const source = await file.text();
     const lines = source.split("\n");
@@ -440,54 +462,62 @@ return server;
 }
 
 // --- Start server ---
-// Create a new McpServer + transport per session so multiple clients can connect
-const sessions = new Map<string, WebStandardStreamableHTTPServerTransport>();
+function startServer() {
+  // Create a new McpServer + transport per session so multiple clients can connect
+  const sessions = new Map<string, WebStandardStreamableHTTPServerTransport>();
 
-Bun.serve({
-  port: PORT,
-  async fetch(req) {
-    const url = new URL(req.url);
+  Bun.serve({
+    port: PORT,
+    async fetch(req) {
+      const url = new URL(req.url);
 
-    if (url.pathname === "/health") {
-      return Response.json({ status: "ok", tools: TOOL_COUNT });
-    }
-
-    if (url.pathname.startsWith("/api/trace/")) {
-      const id = url.pathname.slice("/api/trace/".length);
-      const trace = defaultTraceStore().get(id);
-      if (!trace) {
-        return Response.json({ detail: "trace not found or expired" }, { status: 404 });
+      if (url.pathname === "/health") {
+        return Response.json({ status: "ok", tools: TOOL_COUNT });
       }
-      return Response.json(trace);
-    }
 
-    if (url.pathname !== "/mcp") {
-      return new Response("Not found", { status: 404 });
-    }
+      if (url.pathname.startsWith("/api/trace/")) {
+        const id = url.pathname.slice("/api/trace/".length);
+        const trace = defaultTraceStore().get(id);
+        if (!trace) {
+          return Response.json({ detail: "trace not found or expired" }, { status: 404 });
+        }
+        return Response.json(trace);
+      }
 
-    // Check for existing session
-    const sessionId = req.headers.get("mcp-session-id");
-    if (sessionId && sessions.has(sessionId)) {
-      return sessions.get(sessionId)!.handleRequest(req);
-    }
+      if (url.pathname !== "/mcp") {
+        return new Response("Not found", { status: 404 });
+      }
 
-    // New session: create fresh server + transport
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
-      onsessioninitialized: (id) => {
-        sessions.set(id, transport);
-      },
-    });
+      // Check for existing session
+      const sessionId = req.headers.get("mcp-session-id");
+      if (sessionId && sessions.has(sessionId)) {
+        return sessions.get(sessionId)!.handleRequest(req);
+      }
 
-    transport.onclose = () => {
-      if (transport.sessionId) sessions.delete(transport.sessionId);
-    };
+      // New session: create fresh server + transport
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (id) => {
+          sessions.set(id, transport);
+        },
+      });
 
-    const server = createServer();
-    await server.connect(transport);
+      transport.onclose = () => {
+        if (transport.sessionId) sessions.delete(transport.sessionId);
+      };
 
-    return transport.handleRequest(req);
-  },
-});
+      const server = createServer();
+      await server.connect(transport);
 
-console.log(`[yggdrasil] MCP server listening on http://127.0.0.1:${PORT}/mcp`);
+      return transport.handleRequest(req);
+    },
+  });
+
+  console.log(`[yggdrasil] MCP server listening on http://127.0.0.1:${PORT}/mcp`);
+}
+
+// Only bind the port when run as the entry point — importing this module (e.g. in
+// tests, to exercise pure helpers like resolveSourcePath) must not start the server.
+if (import.meta.main) {
+  startServer();
+}

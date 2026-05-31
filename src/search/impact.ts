@@ -1,4 +1,4 @@
-import { findSymbolByQualifiedName } from "../db/symbols.ts";
+import { findSymbolByQualifiedName, getSymbolById, type CiSymbol } from "../db/symbols.ts";
 import { getImpact as getImpactEdges } from "../db/edges.ts";
 import { timed, type ImpactTracer } from "../tracing/trace.ts";
 import { classifyArchetype, filterByArchetypeExclude, type Archetype } from "./archetype.ts";
@@ -46,7 +46,15 @@ const CONFIDENCE_BUCKETS: Array<{ min: number; max: number }> = [
   { min: 0.0, max: 0.2 },
 ];
 
-/** Analyze blast radius for a symbol. */
+type ResolvedTarget = CiSymbol & { file_path: string; repo_name: string };
+
+interface ImpactCoreOptions {
+  tracer?: ImpactTracer;
+  archetypeExclude?: Archetype[];
+}
+
+/** Analyze blast radius for a symbol, resolving it by qualified name (takes the
+ *  deterministic first match — see findSymbolByQualifiedName). */
 export async function analyzeImpact(
   qualifiedName: string,
   options?: { repo?: string; maxDepth?: number; tracer?: ImpactTracer; archetypeExclude?: Archetype[] },
@@ -58,7 +66,41 @@ export async function analyzeImpact(
   const symbols = await timed(tracer, "lookup", findSymbolByQualifiedName(qualifiedName, options?.repo));
   if (symbols.length === 0) return null;
 
-  const target = symbols[0];
+  return impactForTarget(symbols[0], maxDepth, {
+    tracer,
+    archetypeExclude: options?.archetypeExclude,
+  });
+}
+
+/** Analyze blast radius for an already-resolved symbol id. Avoids the lossy
+ *  re-resolution by qualified_name (overloads / multi-repo collisions) for callers
+ *  that already hold a concrete id, so target, edges, and blast radius all describe
+ *  the same symbol. */
+export async function analyzeImpactBySymbolId(
+  symbolId: string,
+  options?: { maxDepth?: number; tracer?: ImpactTracer; archetypeExclude?: Archetype[] },
+): Promise<ImpactResult | null> {
+  const maxDepth = options?.maxDepth ?? 3;
+  const tracer = options?.tracer;
+
+  const target = await timed(tracer, "lookup", getSymbolById(symbolId));
+  if (!target) return null;
+  tracer?.setQuery(target.qualified_name, maxDepth);
+
+  return impactForTarget(target, maxDepth, {
+    tracer,
+    archetypeExclude: options?.archetypeExclude,
+  });
+}
+
+/** Shared blast-radius core: traverse incoming edges from a resolved target, score
+ *  by depth, tag archetypes, and (optionally) record the trace. */
+async function impactForTarget(
+  target: ResolvedTarget,
+  maxDepth: number,
+  options: ImpactCoreOptions,
+): Promise<ImpactResult> {
+  const tracer = options.tracer;
   tracer?.setStart(target.id, target.qualified_name, target.kind);
 
   const raw = await timed(tracer, "traversal", getImpactEdges(target.id, maxDepth));
@@ -92,7 +134,7 @@ export async function analyzeImpact(
     archetype_counts[e.archetype] = (archetype_counts[e.archetype] ?? 0) + 1;
   }
 
-  const affected = filterByArchetypeExclude(taggedAll, options?.archetypeExclude);
+  const affected = filterByArchetypeExclude(taggedAll, options.archetypeExclude);
   affected.sort((a, b) => b.confidence - a.confidence || a.depth - b.depth);
   tracer?.recordTiming("scoring", performance.now() - tScoringStart);
 

@@ -1,13 +1,14 @@
 import { walkRepo } from "./file-walker.ts";
 import { initParser, loadLanguage, parseSource, type SupportedLanguage } from "./parser.ts";
-import { extractSymbols, buildQualifiedNames, toSymbolInserts } from "./symbol-extractor.ts";
+import { extractSymbols, buildQualifiedNames, toSymbolInserts, buildParentLinks } from "./symbol-extractor.ts";
 import { extractCallGraph } from "./call-graph.ts";
 import { storeImports, resolveImports, deleteImportEdges } from "./import-resolver.ts";
 import { resolveAndStoreEdges } from "./edge-resolver.ts";
 import { embedSymbols } from "./embedder.ts";
+import { warmupEmbeddings } from "../embeddings.ts";
 import { upsertRepo, updateRepoCommit } from "../db/repos.ts";
-import { upsertFile, deleteFileData, deleteStaleFiles } from "../db/files.ts";
-import { insertSymbolsBatch, getRepoSymbolCount } from "../db/symbols.ts";
+import { ensureFile, markFileIndexed, deleteFileData, deleteStaleFiles } from "../db/files.ts";
+import { insertSymbolsBatch, updateSymbolParents, getRepoSymbolCount } from "../db/symbols.ts";
 import { sql } from "../db/connection.ts";
 import type { RepoConfig } from "../config.ts";
 
@@ -42,6 +43,13 @@ export async function indexRepo(
   );
 
   await initParser();
+
+  // Fail fast on an embedding model/dimension misconfig BEFORE doing any indexing work,
+  // rather than after symbols + content hashes are already committed (warmup is memoized,
+  // so Phase 3's embedSymbols reuses it). Skipped entirely with --no-embed.
+  if (!options.skipEmbeddings) {
+    await warmupEmbeddings();
+  }
 
   const repo = await upsertRepo(config.name, config.path);
 
@@ -80,8 +88,12 @@ export async function indexRepo(
     qualifiedNames: string[];
   }[] = [];
 
+  // Files whose content_hash is written only after Phase 2, so an interrupted run
+  // re-processes them instead of skipping them as symbol-less (see ensureFile).
+  const pendingHashMarks: { fileId: string; language: string; contentHash: string }[] = [];
+
   for (const file of files) {
-    const { id: fileId, changed } = await upsertFile(
+    const { id: fileId, changed } = await ensureFile(
       repo.id,
       file.relativePath,
       file.language,
@@ -90,6 +102,7 @@ export async function indexRepo(
 
     if (!changed) continue;
     changedFiles++;
+    pendingHashMarks.push({ fileId, language: file.language, contentHash: file.contentHash });
 
     await deleteFileData(fileId);
 
@@ -112,6 +125,10 @@ export async function indexRepo(
       let symbolDbIds: string[] = [];
       if (inserts.length > 0) {
         symbolDbIds = await insertSymbolsBatch(inserts);
+        // Symbols are inserted with parent_id = NULL (a child needs its parent's DB
+        // id, which only exists post-insert). Wire parents up now so the call graph
+        // and import top-level filters work — without this every edge fails to resolve.
+        await updateSymbolParents(buildParentLinks(extraction.symbols, symbolDbIds));
       }
 
       // Store raw imports for later resolution
@@ -164,6 +181,14 @@ export async function indexRepo(
       console.log(`[yggdrasil] Created ${totalEdges} total edges`);
     }
   }
+
+  // Now that symbols, imports, and edges are durably stored, stamp each changed file's
+  // content_hash. Crashing before this point leaves files re-processable rather than
+  // orphaned as symbol-less. (Embeddings below are idempotent and not gated by the hash.)
+  // Marks are independent per file → run concurrently (pool-bounded) instead of serially.
+  await Promise.all(
+    pendingHashMarks.map((mark) => markFileIndexed(mark.fileId, mark.language, mark.contentHash)),
+  );
 
   // ── Phase 3: Embed any symbols that don't have an embedding yet ──
   // Idempotent — also picks up gaps from interrupted prior runs.
