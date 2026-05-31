@@ -50,6 +50,9 @@ function jsonResponseWithTrace(data: unknown, tracer: { toJSON(): unknown } | un
  * realpath check (tracked as a follow-up); the reported caller-input traversal is closed.
  */
 export function resolveSourcePath(repoPath: string, filePath: string): string | null {
+  // A NUL byte passes the lexical containment check but makes Bun.file()/fs throw
+  // (TypeError: must be a string without null bytes) instead of returning cleanly.
+  if (filePath.includes("\0")) return null;
   const root = resolve(repoPath);
   const full = resolve(root, filePath);
   // Must be strictly inside root (root + separator). Equality (full === root) means the

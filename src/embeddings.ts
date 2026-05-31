@@ -57,6 +57,13 @@ export async function generateEmbedding(
 let dimsValidated = false;
 
 export async function warmupEmbeddings(): Promise<void> {
+  // Clear failure for a malformed EMBEDDING_DIMS (e.g. a non-numeric env → NaN) before
+  // loading the model, instead of a confusing "produces 384-dim but EMBEDDING_DIMS=NaN".
+  if (!Number.isInteger(EMBEDDING_DIMS) || EMBEDDING_DIMS <= 0) {
+    throw new Error(
+      `[yggdrasil] EMBEDDING_DIMS must be a positive integer, got ${JSON.stringify(process.env.EMBEDDING_DIMS)}.`,
+    );
+  }
   const ext = await getExtractor();
   // Fail fast on a model/config dimension mismatch — once per process. Without this,
   // EMBEDDING_DIMS is dead config: a model swap silently breaks every write (and pgvector

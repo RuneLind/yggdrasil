@@ -163,7 +163,7 @@ export async function findSymbolByQualifiedName(
     JOIN ci_repos r ON r.id = f.repo_id
     WHERE s.qualified_name = ${qualifiedName}
     ${repoFilter}
-    ORDER BY r.name, f.path, s.start_line
+    ORDER BY r.name, f.path, s.start_line, s.id
   `;
 }
 

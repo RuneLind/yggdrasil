@@ -185,10 +185,12 @@ export async function indexRepo(
   // Now that symbols, imports, and edges are durably stored, stamp each changed file's
   // content_hash. Crashing before this point leaves files re-processable rather than
   // orphaned as symbol-less. (Embeddings below are idempotent and not gated by the hash.)
-  // Marks are independent per file → run concurrently (pool-bounded) instead of serially.
-  await Promise.all(
-    pendingHashMarks.map((mark) => markFileIndexed(mark.fileId, mark.language, mark.contentHash)),
-  );
+  // Stamp sequentially: a fan-out here would flood the shared pool (the same instance
+  // Muninn uses) with one query per changed file and, on a mid-flight failure, leave
+  // other marks committing detached after indexRepo has already thrown.
+  for (const mark of pendingHashMarks) {
+    await markFileIndexed(mark.fileId, mark.language, mark.contentHash);
+  }
 
   // ── Phase 3: Embed any symbols that don't have an embedding yet ──
   // Idempotent — also picks up gaps from interrupted prior runs.

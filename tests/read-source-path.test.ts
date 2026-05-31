@@ -41,4 +41,8 @@ describe("resolveSourcePath", () => {
   test("rejects a path that normalizes back to the repo root itself", () => {
     expect(resolveSourcePath(ROOT, ".")).toBeNull();
   });
+
+  test("rejects a NUL byte (would make Bun.file/fs throw instead of returning cleanly)", () => {
+    expect(resolveSourcePath(ROOT, "src/" + String.fromCharCode(0) + "foo.kt")).toBeNull();
+  });
 });
