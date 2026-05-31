@@ -75,6 +75,9 @@ export function globToLike(glob: string): string {
   // an escaped literal `%` (`\%`) when we collapse adjacent wildcards at the end.
   const W = "\x00";
   return glob
+    .replace(/\\/g, "\\\\")      // escape literal backslashes first (LIKE's escape char);
+                                 // otherwise a trailing `\` is a dangling escape (Postgres
+                                 // 22025 error) and an interior `\` silently drops a char
     .replace(/%/g, "\\%")        // escape existing SQL wildcards
     .replace(/_/g, "\\_")
     .replace(/\*\*\//g, W)       // **/ absorbs the path separator

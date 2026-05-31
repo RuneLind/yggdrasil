@@ -172,14 +172,14 @@ export async function hybridSearch(
     for (const c of candidates) tracer.annotate(c.id, c.qualified_name, c.kind);
   }
 
-  // fused.boosted is already sorted (score desc, id asc), so the slice preserves order.
+  // fused.boosted is already sorted (score desc, id asc). Drop any candidate we didn't
+  // hydrate (e.g. a row deleted by a concurrent re-index between the leg queries and the
+  // detail fetch) *before* slicing, so it can't occupy a top-`limit` slot that a valid
+  // lower-ranked candidate would otherwise fill.
   const finalResults: SearchResult[] = fused.boosted
+    .filter((c) => detailById.has(c.id))
     .slice(0, limit)
-    .map((c) => {
-      const d = detailById.get(c.id);
-      return d ? { ...d, score: c.score } : null;
-    })
-    .filter((r): r is SearchResult => r !== null);
+    .map((c) => ({ ...detailById.get(c.id)!, score: c.score }));
 
   if (tracer) {
     finalResults.forEach((r, i) => tracer.recordStage("final", r.id, i + 1, r.score));

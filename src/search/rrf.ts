@@ -24,6 +24,11 @@ export const DEFAULT_KIND_BOOST: Record<string, number> = {
   field: 0.7,
 };
 
+/**
+ * A leg's pre-ranked row. RRF fuses on array POSITION, so each leg must already be
+ * sorted best-first; `rank` is the leg's raw score, carried through only for the
+ * caller's tracing — fuseAndRank itself does not read it.
+ */
 export interface RankedId {
   id: string;
   rank: number;
@@ -76,12 +81,13 @@ export function fuseAndRank(
     score: rrfScore * (kindBoost[kindById.get(id) ?? ""] ?? 1.0),
   }));
 
-  const rrfRanked = [...candidates].sort(
-    (a, b) => b.rrfScore - a.rrfScore || a.id.localeCompare(b.id),
-  );
-  const boosted = [...candidates].sort(
-    (a, b) => b.score - a.score || a.id.localeCompare(b.id),
-  );
+  // Plain byte-order id tiebreak: locale-invariant (localeCompare's result is
+  // ICU/locale-dependent, so "deterministic" would only hold per-locale) and cheaper.
+  // ci_symbols.id is an opaque ASCII id, so byte order is fine.
+  const byId = (a: FusedCandidate, b: FusedCandidate) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  const rrfRanked = [...candidates].sort((a, b) => b.rrfScore - a.rrfScore || byId(a, b));
+  const boosted = [...candidates].sort((a, b) => b.score - a.score || byId(a, b));
 
   return { rrfRanked, boosted };
 }

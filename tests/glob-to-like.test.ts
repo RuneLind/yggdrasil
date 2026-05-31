@@ -40,5 +40,16 @@ describe("globToLike", () => {
     test("? still maps to _ alongside escaped literals", () => {
       expect(globToLike("a?b_c")).toBe("a_b\\_c");
     });
+
+    test("literal backslash is escaped (no dangling LIKE escape char)", () => {
+      // A trailing backslash would otherwise be a dangling escape → Postgres 22025;
+      // an interior one would silently consume the next char.
+      expect(globToLike("dir\\")).toBe("dir\\\\");
+      expect(globToLike("a\\b.kt")).toBe("a\\\\b.kt");
+    });
+
+    test("backslash is escaped before %/_, so their added escapes aren't doubled", () => {
+      expect(globToLike("a\\b_c")).toBe("a\\\\b\\_c");
+    });
   });
 });
