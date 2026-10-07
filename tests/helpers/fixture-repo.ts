@@ -13,6 +13,10 @@ import type { SupportedLanguage } from "../../src/indexer/parser.ts";
  * repo name (`itest-<random>`); `cleanup()` deletes that ci_repos row (cascades to
  * files, symbols, edges, imports) and the temp dir.
  *
+ * Each harness start also sweeps `itest-*` rows older than an hour, left behind by runs
+ * killed before cleanup. `created_at`, not `indexed_at`: indexed_at is only set from a
+ * git commit, and fixture dirs are not git repos.
+ *
  * The harness never calls `sql.end()`: bun runs every test file in one process
  * against one shared pool, so ending it in one file's afterAll breaks the next file.
  */
@@ -41,12 +45,17 @@ export async function createFixtureRepo(
   files: Record<string, string>,
   languages: SupportedLanguage[] = ["java", "kotlin"],
 ): Promise<FixtureRepo> {
+  await sql`DELETE FROM ci_repos WHERE name LIKE 'itest-%' AND created_at < now() - interval '1 hour'`;
+
   const name = `itest-${crypto.randomUUID().slice(0, 8)}`;
   const path = await mkdtemp(join(tmpdir(), `yggdrasil-${name}-`));
 
   const cleanup = async () => {
-    await sql`DELETE FROM ci_repos WHERE name = ${name}`;
-    await rm(path, { recursive: true, force: true });
+    try {
+      await sql`DELETE FROM ci_repos WHERE name = ${name}`;
+    } finally {
+      await rm(path, { recursive: true, force: true });
+    }
   };
 
   try {
@@ -87,7 +96,8 @@ export async function createFixtureRepo(
       cleanup,
     };
   } catch (err) {
-    await cleanup();
+    // Keep the indexing error: a cleanup failure here would otherwise replace it.
+    await cleanup().catch((cleanupErr) => console.error(`cleanup of ${name} failed:`, cleanupErr));
     throw err;
   }
 }

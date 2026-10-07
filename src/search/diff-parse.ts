@@ -57,9 +57,13 @@ export function unquoteGitPath(path: string): string {
   return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
-/** Header path → repo-relative path: unquote first, since the a/ b/ prefix sits inside the quotes. */
+/**
+ * Header path → repo-relative path. git appends a TAB to a `---`/`+++` path that holds a
+ * space (`+++ b/a b.kt\t`, `+++ "b/\303\205 b.kt"\t`), so drop that first; then unquote,
+ * since the a/ b/ prefix sits inside the quotes.
+ */
 function headerPath(raw: string): string {
-  return stripDiffPrefix(unquoteGitPath(raw));
+  return stripDiffPrefix(unquoteGitPath(raw.endsWith("\t") ? raw.slice(0, -1) : raw));
 }
 
 /**

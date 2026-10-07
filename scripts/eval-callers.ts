@@ -9,12 +9,14 @@
  * secondary column scores raw incoming `calls` edges. A caller is keyed by
  * (file path, method name), so several usages or overloads of one caller count once.
  *
- * Always exits 0: this is a report, not a gate.
+ * Exits 0 on a report, whatever the scores, and when no fixture exists: this is a report,
+ * not a gate. Exits 1 when the run itself fails: malformed fixture, repo not indexed, DB error.
  */
 import { sql, closeDb } from "../src/db/connection.ts";
 import { getRepo } from "../src/db/repos.ts";
 import { findSymbolByQualifiedName } from "../src/db/symbols.ts";
 import { analyzeImpactBySymbolId } from "../src/search/impact.ts";
+import { intellijMethodName, intellijParamCount, symbolParamCount } from "./eval-callers-parse.ts";
 
 interface FixtureCaller {
   signature: string;
@@ -47,48 +49,6 @@ const isTest = (path: string) => `/${path}`.includes("/src/test/");
 
 const callerKey = (file: string, method: string) => `${file}#${stripBackticks(method)}`;
 
-/** "Foo.bar(Baz)" → "bar": text between the last `.` before `(` and the `(`. */
-function intellijMethodName(signature: string): string {
-  const head = signature.slice(0, signature.indexOf("("));
-  return head.slice(head.lastIndexOf(".") + 1);
-}
-
-/**
- * Count the parameters in the first balanced `(...)` at or after `from`. Commas inside
- * generics, nested parens (annotations, default values) and brackets do not count.
- * Returns null when no balanced group is found.
- */
-function countParams(text: string, from = 0): number | null {
-  const open = text.indexOf("(", from);
-  if (open < 0) return null;
-  let depth = 0;
-  let segments = 0;
-  let segmentHasContent = false;
-  for (let i = open + 1; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === "(" || ch === "<" || ch === "[" || ch === "{") depth++;
-    else if ((ch === ")" || ch === "]" || ch === "}" || ch === ">") && depth > 0) {
-      // `->` in a Kotlin function type is not a closing bracket.
-      if (!(ch === ">" && text[i - 1] === "-")) depth--;
-    } else if (ch === ")") {
-      return segments + (segmentHasContent ? 1 : 0);
-    } else if (ch === "," && depth === 0) {
-      if (segmentHasContent) segments++;
-      segmentHasContent = false;
-      continue;
-    }
-    if (!/\s/.test(ch)) segmentHasContent = true;
-  }
-  return null;
-}
-
-/** Parameter count of a ci_symbols signature, read from the group after the method name. */
-function symbolParamCount(signature: string | null, name: string): number | null {
-  if (!signature) return null;
-  const at = signature.indexOf(`${name}(`);
-  return countParams(signature, at >= 0 ? at + name.length : 0);
-}
-
 interface Score {
   expected: Set<string>;
   found: Set<string>;
@@ -115,7 +75,8 @@ async function main() {
 
   const repo = await getRepo(fixture.repo);
   if (!repo) {
-    console.log(`Repo "${fixture.repo}" is not indexed. Run \`bun run index <path>\` first.`);
+    console.error(`Repo "${fixture.repo}" is not indexed. Run \`bun run index <path>\` first.`);
+    process.exitCode = 1;
     return;
   }
 
@@ -135,7 +96,7 @@ async function main() {
   const notes: string[] = [];
 
   for (const fs of fixture.symbols) {
-    const wantParams = fs.intellij_signature ? countParams(fs.intellij_signature) : null;
+    const wantParams = fs.intellij_signature ? intellijParamCount(fs.intellij_signature) : null;
     // Overloads appear as separate fixture entries; the arity tells their rows apart.
     const label = fs.qualified_name.split(".").slice(-2).join(".") + (wantParams !== null ? `/${wantParams}` : "");
     if (fs.error) {
@@ -156,6 +117,8 @@ async function main() {
     let candidates = await findSymbolByQualifiedName(fs.qualified_name, fixture.repo);
     if (fs.file && candidates.some((c) => c.file_path === fs.file)) {
       candidates = candidates.filter((c) => c.file_path === fs.file);
+    } else if (fs.file && candidates.length > 0) {
+      notes.push(`${label}: file ${fs.file} matches no candidate, not narrowed by file`);
     }
     if (candidates.length > 1 && wantParams !== null) {
       const byCount = candidates.filter((c) => symbolParamCount(c.signature, c.name) === wantParams);
@@ -244,6 +207,7 @@ try {
   await main();
 } catch (e) {
   console.error("eval-callers failed:", e);
+  process.exitCode = 1;
 } finally {
   await closeDb();
 }

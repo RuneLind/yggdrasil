@@ -176,6 +176,30 @@ index 1234567..89abcde 100644
     expect(filesObject(diff)).toEqual({ 'x/q"b\\c\td.kt': [1] });
   });
 
+  // git appends a TAB to a `---`/`+++` path that contains a space (shapes captured from git 2.x).
+  test("quoted path with a space: trailing TAB after the closing quote is dropped", () => {
+    const q = String.raw`"b/\303\205 b.kt"`;
+    const diff = [
+      String.raw`diff --git "a/\303\205 b.kt" "b/\303\205 b.kt"`,
+      String.raw`--- "a/\303\205 b.kt"` + "\t",
+      `+++ ${q}\t`,
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    expect(filesObject(diff)).toEqual({ "Å b.kt": [1] });
+  });
+
+  test("quotePath=false path with a space: trailing TAB is dropped", () => {
+    const diff = ["diff --git a/a b.kt b/a b.kt", "--- a/a b.kt\t", "+++ b/a b.kt\t", "@@ -1 +1 @@", "-a", "+b"].join("\n");
+    expect(filesObject(diff)).toEqual({ "a b.kt": [1] });
+  });
+
+  test("deleted file with a space: old-side path loses its TAB too", () => {
+    const diff = ["diff --git a/Å b.kt b/Å b.kt", "--- a/Å b.kt\t", "+++ /dev/null", "@@ -1,2 +0,0 @@", "-a", "-b"].join("\n");
+    expect(filesObject(diff)).toEqual({ "Å b.kt": [1, 2] });
+  });
+
   test("empty diff → no files", () => {
     expect(filesObject("")).toEqual({});
   });

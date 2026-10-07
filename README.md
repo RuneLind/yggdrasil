@@ -292,7 +292,7 @@ Tested on the Melosys multi-repo stack:
 
 2. Index the repo at the same commit, then run `bun run eval:callers`.
 
-The report scores the depth-1 `impact` result, with raw incoming `calls` edges as a second column. It matches a caller by file path and method name, and splits production callers from test callers (`/src/test/`). Callers that are not functions, such as property initializers, are excluded and counted. The script warns when the index's `last_commit` differs from the fixture's `commit`.
+The report scores the depth-1 `impact` result, with raw incoming `calls` edges as a second column. It matches a caller by file path and method name, and splits production callers from test callers (`/src/test/`). Callers that are not functions, such as property initializers, are excluded and counted. The script warns when the index's `last_commit` differs from the fixture's `commit`. It exits 0 after a report, whatever the scores, and when no fixture exists; it exits 1 on a malformed fixture, a repo that is not indexed, or a database error.
 
 ## Configuration
 

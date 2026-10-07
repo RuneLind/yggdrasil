@@ -15,7 +15,9 @@ const RUN = process.env.YGGDRASIL_INTEGRATION_TESTS === "1";
 const FILE = "src/main/kotlin/no/nav/test/Årsavregning.kt";
 
 async function git(cwd: string, ...args: string[]) {
-  const proc = Bun.spawn(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+  // Isolate from the user's global config: no signing prompt, no hooks.
+  const isolated = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
+  const proc = Bun.spawn(["git", ...isolated, ...args], {
     cwd,
     stdout: "ignore",
     stderr: "pipe",
