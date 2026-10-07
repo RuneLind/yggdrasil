@@ -278,6 +278,22 @@ Tested on the Melosys multi-repo stack:
 | Incremental (no changes) | 485ms | — |
 | Embedding generation | ~5 min (30K symbols) | — |
 
+### Evaluating call resolution
+
+`bun run eval:callers [fixture.json]` scores incoming callers against an IntelliJ oracle. The default fixture is `eval/fixtures/melosys-api-callers.json`.
+
+1. To capture the fixture, open the repo in IntelliJ and use an agent with the JetBrains MCP. For each eval method, call `analyze_calls` with `INCOMING_CALLS` and `depth: 1`, and write the result as JSON:
+
+   ```json
+   { "repo": "melosys-api", "commit": "<sha>", "captured": "<date>", "source": "intellij analyze_calls",
+     "symbols": [ { "qualified_name": "no.nav.Foo.bar", "intellij_signature": "bar(Baz)", "file": "<repo-relative path>",
+                    "callers": [ { "signature": "Caller.method(Baz)", "file": "<repo-relative path>", "usages": 1 } ] } ] }
+   ```
+
+2. Index the repo at the same commit, then run `bun run eval:callers`.
+
+The report scores the depth-1 `impact` result, with raw incoming `calls` edges as a second column. It matches a caller by file path and method name, and splits production callers from test callers (`/src/test/`). Callers that are not functions, such as property initializers, are excluded and counted. The script warns when the index's `last_commit` differs from the fixture's `commit`. It exits 0 after a report, whatever the scores, and when no fixture exists; it exits 1 on a malformed fixture, a repo that is not indexed, or a database error.
+
 ## Configuration
 
 ### repos.json

@@ -1,6 +1,5 @@
-import { describe, test, expect, afterAll } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { analyzeImpact } from "../src/search/impact.ts";
-import { closeDb } from "../src/db/connection.ts";
 
 /**
  * Integration smoke test for archetype tagging against a live index.
@@ -14,9 +13,8 @@ import { closeDb } from "../src/db/connection.ts";
 const RUN = process.env.YGGDRASIL_INTEGRATION_TESTS === "1";
 
 describe.skipIf(!RUN)("archetype tagging against real melosys-api index", () => {
-  afterAll(async () => {
-    await closeDb();
-  });
+  // No closeDb() here: bun runs every test file in one process on one shared pool,
+  // so ending it in this file's afterAll failed the integration files that ran after it.
 
   test("Behandling blast radius gets sensible archetype distribution", async () => {
     const result = await analyzeImpact("no.nav.melosys.domain.Behandling", {

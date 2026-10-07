@@ -8,7 +8,7 @@ import type { ExtractionResult } from "./symbol-extractor.ts";
  * Resolve extracted calls and inheritance to ci_symbols IDs and create edges.
  *
  * Resolution strategy for method calls:
- * - PascalCase receiver → static call, resolve to that type's method
+ * - Uppercase-initial receiver (any script) → static call, resolve to that type's method
  * - No receiver / "this" → local call, resolve to same class's method
  * - Instance calls (variable receivers) need type inference — skipped for MVP
  */
@@ -86,7 +86,8 @@ export async function resolveAndStoreEdges(
         const candidates = methodLookup.get(call.methodName);
         if (!candidates) continue;
 
-        if (call.receiver && /^[A-Z]/.test(call.receiver)) {
+        // \p{Lu}, not [A-Z]: Norwegian type names start with Æ/Ø/Å (e.g. Årsavregning).
+        if (call.receiver && /^\p{Lu}/u.test(call.receiver)) {
           // Static call: Receiver.method
           const match = candidates.find((c) =>
             c.parentQualified?.endsWith(`.${call.receiver}`) ||

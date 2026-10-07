@@ -1,0 +1,1137 @@
+{
+  "repo": "melosys-api",
+  "commit": "90f007a971d6cf19cbb1c89a24efea2acef392ca",
+  "captured": "2026-10-07",
+  "source": "IntelliJ analyze_calls INCOMING_CALLS depth 1",
+  "symbols": [
+    {
+      "qualified_name": "no.nav.melosys.service.avgift.aarsavregning.ÅrsavregningService.hentGjeldendeBehandlingsresultaterForÅrsavregning",
+      "intellij_signature": "ÅrsavregningService.hentGjeldendeBehandlingsresultaterForÅrsavregning(String, Int, Instant?)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningService.kt",
+      "callers": [
+        {
+          "signature": "OpprettÅrsavregningBehandling.utfør(Prosessinstans)",
+          "file": "saksflyt/src/main/kotlin/no/nav/melosys/saksflyt/steg/arsavregning/OpprettÅrsavregningBehandling.kt",
+          "usages": 1,
+          "tree_path": "OpprettÅrsavregningBehandling.utfør(Prosessinstans)"
+        },
+        {
+          "signature": "OpprettÅrsavregningModelBehandlingTest.setupMock(Behandling, Behandlingsaarsaktyper)",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/arsavregning/OpprettÅrsavregningModelBehandlingTest.kt",
+          "usages": 1,
+          "tree_path": "OpprettÅrsavregningModelBehandlingTest.setupMock(Behandling, Behandlingsaarsaktyper)"
+        },
+        {
+          "signature": "SkattehendelserConsumerTest.behandling uten år tillater opprettelse og gjentatt hendelse bruker behandling med år(Behandlingsstatus)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumerTest.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumerTest.behandling uten år tillater opprettelse og gjentatt hendelse bruker behandling med år(Behandlingsstatus)"
+        },
+        {
+          "signature": "SkattehendelserConsumerTest.ikke opprette ny behandling ved skatteoppgjør uten overlappende medlemskapsperiode()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumerTest.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumerTest.ikke opprette ny behandling ved skatteoppgjør uten overlappende medlemskapsperiode()"
+        },
+        {
+          "signature": "SkattehendelserConsumerTest.lag behandling ved skatteoppgjør hendelse når vi har fagsak behandlinger med trygdeavgift()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumerTest.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumerTest.lag behandling ved skatteoppgjør hendelse når vi har fagsak behandlinger med trygdeavgift()"
+        },
+        {
+          "signature": "SkattehendelserConsumerTest.oppdater behandling ved skatteoppgjør med endring i tidligere skatteoppgjør og ikke avsluttet ennå med overlapp()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumerTest.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumerTest.oppdater behandling ved skatteoppgjør med endring i tidligere skatteoppgjør og ikke avsluttet ennå med overlapp()"
+        },
+        {
+          "signature": "SkattehendelserConsumerTest.skal ikke opprette automatisk årsavregningoppgave dersom trygdeavgiften bare skal betales til Skatteetaten ()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumerTest.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumerTest.skal ikke opprette automatisk årsavregningoppgave dersom trygdeavgiften bare skal betales til Skatteetaten ()"
+        },
+        {
+          "signature": "SkattehendelserConsumerTest.status oppdateres ikke når behandlingen er flyttet videre etter oppslaget()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumerTest.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumerTest.status oppdateres ikke når behandlingen er flyttet videre etter oppslaget()"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseService.skalBetalesTilNav(Fagsak, Int)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseService.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseService.skalBetalesTilNav(Fagsak, Int)"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoering.kjør(Boolean, Int?, Boolean, SkattepliktigeAarsavregningKjoering.JobStatus.() -> List<SkattehendelseItem>)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoering.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoering.kjør(Boolean, Int?, Boolean, SkattepliktigeAarsavregningKjoering.JobStatus.() -> List<SkattehendelseItem>)"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.aktør der alle saker feilet i filteret telles ikke som uten treff()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.aktør der alle saker feilet i filteret telles ikke som uten treff()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.en feilet sak stopper ikke resten av kjøringen()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.en feilet sak stopper ikke resten av kjøringen()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.en fullført kjøring med duplikater er ikke merket som avbrutt()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.en fullført kjøring med duplikater er ikke merket som avbrutt()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.feil før og etter at saken er vurdert telles hver for seg()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 2,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.feil før og etter at saken er vurdert telles hver for seg()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.feil i rapportoppslagene gjør ikke en kategorisert sak til en feilet sak()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.feil i rapportoppslagene gjør ikke en kategorisert sak til en feilet sak()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.flere aktive årsavregninger stopper saken i stedet for å endre en vilkårlig()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.flere aktive årsavregninger stopper saken i stedet for å endre en vilkårlig()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.kjøring som stoppes av for mange feil sier også fra at den ble avbrutt()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.kjøring som stoppes av for mange feil sier også fra at den ble avbrutt()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.kjøring som stoppes av taket sier fra at den ble avbrutt()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.kjøring som stoppes av taket sier fra at den ble avbrutt()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.nødbremsen midt i en aktørs saker stopper hele kjøringen, ikke bare den ene saken()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.nødbremsen midt i en aktørs saker stopper hele kjøringen, ikke bare den ene saken()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.stubTrygdeavgift(Behandlingsresultat)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.stubTrygdeavgift(Behandlingsresultat)"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoeringTest.ulike år for samme person er ikke duplikater()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoeringTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoeringTest.ulike år for samme person er ikke duplikater()"
+        },
+        {
+          "signature": "ÅrsavregningIkkeSkattepliktigeFinner.finnSakerMedBehandlinger(LocalDate, LocalDate)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ikkeskattepliktig/ÅrsavregningIkkeSkattepliktigeFinner.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningIkkeSkattepliktigeFinner.finnSakerMedBehandlinger(LocalDate, LocalDate)"
+        },
+        {
+          "signature": "ÅrsavregningService.hentSisteGjeldendeAvgiftspliktigePerioder(Int, String?, Instant?)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningService.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningService.hentSisteGjeldendeAvgiftspliktigePerioder(Int, String?, Instant?)"
+        },
+        {
+          "signature": "ÅrsavregningService.hentTidligereAvgift(Int, String?, Instant?)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningService.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningService.hentTidligereAvgift(Int, String?, Instant?)"
+        },
+        {
+          "signature": "ÅrsavregningService.hentTidligereTrygdeavgiftsgrunnlag(Int, String?, Instant?)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningService.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningService.hentTidligereTrygdeavgiftsgrunnlag(Int, String?, Instant?)"
+        },
+        {
+          "signature": "ÅrsavregningService.opprettEllerOppdaterÅrsavregning(Behandlingsresultat, Int)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningService.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningService.opprettEllerOppdaterÅrsavregning(Behandlingsresultat, Int)"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.behandling uten vedtaksdato brukes når den er eneste, men ikke når grunnlaget skal være fra før en vedtaksdato()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 2,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.behandling uten vedtaksdato brukes når den er eneste, men ikke når grunnlaget skal være fra før en vedtaksdato()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.ekskluderer årsavregninger uten vedtak()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.ekskluderer årsavregninger uten vedtak()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.filtrerer bort alle behandlingsresultater når alle har vedtaksdato etter førVedtaksdato()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.filtrerer bort alle behandlingsresultater når alle har vedtaksdato etter førVedtaksdato()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.filtrerer bort behandlingsresultat når vedtaksdato er lik førVedtaksdato()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.filtrerer bort behandlingsresultat når vedtaksdato er lik førVedtaksdato()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.filtrerer bort behandlingsresultater med vedtaksdato etter gitt førVedtaksdato()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.filtrerer bort behandlingsresultater med vedtaksdato etter gitt førVedtaksdato()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.flere behandlinger uten vedtaksdato sorteres på registrert dato()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.flere behandlinger uten vedtaksdato sorteres på registrert dato()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter nyeste behandlingsresultat med grunnlag og riktig år for opprettelse av ny årsavregning()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter nyeste behandlingsresultat med grunnlag og riktig år for opprettelse av ny årsavregning()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter nyeste behandlingsresultat med manuellAvgift satt og uten medlemskapsperioder ved opprettelse av årsavregning()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter nyeste behandlingsresultat med manuellAvgift satt og uten medlemskapsperioder ved opprettelse av årsavregning()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter samme behandling for medlemskap og avgift når medlemskapsperiode ikke er endret()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter samme behandling for medlemskap og avgift når medlemskapsperiode ikke er endret()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter separate behandlinger for medlemskapsperiode og avgiftsgrunnlag når de er forskjellige()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter separate behandlinger for medlemskapsperiode og avgiftsgrunnlag når de er forskjellige()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter årsavregning med resulttatype FASTSATT_TRYGDEAVGIFT()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.henter årsavregning med resulttatype FASTSATT_TRYGDEAVGIFT()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.håndterer behandling uten trygdeavgiftsperioder korrekt()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.håndterer behandling uten trygdeavgiftsperioder korrekt()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.inkluderer alle behandlingsresultater når førVedtaksdato er null()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.inkluderer alle behandlingsresultater når førVedtaksdato er null()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.ny vurdering som fjerner perioden for året gir nyeste behandling som avgiftspliktig periode()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.ny vurdering som fjerner perioden for året gir nyeste behandling som avgiftspliktig periode()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.velger behandling basert på vedtaksdato og ikke registrertDato når disse er forskjellige()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.velger behandling basert på vedtaksdato og ikke registrertDato når disse er forskjellige()"
+        },
+        {
+          "signature": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.velger behandlingen med vedtak når en annen avsluttet behandling mangler vedtaksmetadata()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/ÅrsavregningServiceHentSisteBehandlingsresultatTest.kt",
+          "usages": 2,
+          "tree_path": "ÅrsavregningServiceHentSisteBehandlingsresultatTest.velger behandlingen med vedtak når en annen avsluttet behandling mangler vedtaksmetadata()"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.saksflyt.steg.soknad.DigitalSøknadMapper.harArbeidsgiverdel",
+      "intellij_signature": "DigitalSøknadMapper.harArbeidsgiverdel(UtsendtArbeidstakerSkjemaM2MDto)",
+      "file": "saksflyt/src/main/kotlin/no/nav/melosys/saksflyt/steg/soknad/DigitalSøknadMapper.kt",
+      "callers": [
+        {
+          "signature": "DigitalSøknadMapperTest.HarArbeidsgiverdel.innsending med arbeidsgiverdel uten arbeidssted har arbeidsgiverdel()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/soknad/DigitalSøknadMapperTest.kt",
+          "usages": 1,
+          "tree_path": "HarArbeidsgiverdel.innsending med arbeidsgiverdel uten arbeidssted har arbeidsgiverdel()"
+        },
+        {
+          "signature": "DigitalSøknadMapperTest.HarArbeidsgiverdel.innsending med koblet arbeidsgiverdel har arbeidsgiverdel()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/soknad/DigitalSøknadMapperTest.kt",
+          "usages": 1,
+          "tree_path": "HarArbeidsgiverdel.innsending med koblet arbeidsgiverdel har arbeidsgiverdel()"
+        },
+        {
+          "signature": "DigitalSøknadMapperTest.HarArbeidsgiverdel.innsending uten arbeidsgiverdel har ikke arbeidsgiverdel()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/soknad/DigitalSøknadMapperTest.kt",
+          "usages": 1,
+          "tree_path": "HarArbeidsgiverdel.innsending uten arbeidsgiverdel har ikke arbeidsgiverdel()"
+        },
+        {
+          "signature": "HåndterEksisterendeSakDigitalSøknad.håndterÅpenBehandling(Fagsak, Behandling, UtsendtArbeidstakerSkjemaM2MDto)",
+          "file": "saksflyt/src/main/kotlin/no/nav/melosys/saksflyt/steg/soknad/HåndterEksisterendeSakDigitalSøknad.kt",
+          "usages": 1,
+          "tree_path": "HåndterEksisterendeSakDigitalSøknad.håndterÅpenBehandling(Fagsak, Behandling, UtsendtArbeidstakerSkjemaM2MDto)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.journalforing.JournalfoeringService.finnHovedpartIdent",
+      "intellij_signature": "JournalfoeringService.finnHovedpartIdent(Journalpost)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/journalforing/JournalfoeringService.kt",
+      "callers": [
+        {
+          "signature": "JournalfoeringServiceTest.finnBrukerIdent_brukerErNull_returnererIngenting()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/journalforing/JournalfoeringServiceTest.kt",
+          "usages": 1,
+          "tree_path": "JournalfoeringServiceTest.finnBrukerIdent_brukerErNull_returnererIngenting()"
+        },
+        {
+          "signature": "JournalfoeringServiceTest.finnBrukerIdent_brukerIdentErAktørId_henterIdent()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/journalforing/JournalfoeringServiceTest.kt",
+          "usages": 1,
+          "tree_path": "JournalfoeringServiceTest.finnBrukerIdent_brukerIdentErAktørId_henterIdent()"
+        },
+        {
+          "signature": "JournalfoeringServiceTest.finnBrukerIdent_brukerIdentErFolkeregisterident_returnererIdent()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/journalforing/JournalfoeringServiceTest.kt",
+          "usages": 1,
+          "tree_path": "JournalfoeringServiceTest.finnBrukerIdent_brukerIdentErFolkeregisterident_returnererIdent()"
+        },
+        {
+          "signature": "JournalfoeringServiceTest.finnBrukerIdent_brukerIdentErOrgnr_returnererOrgnr()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/journalforing/JournalfoeringServiceTest.kt",
+          "usages": 1,
+          "tree_path": "JournalfoeringServiceTest.finnBrukerIdent_brukerIdentErOrgnr_returnererOrgnr()"
+        },
+        {
+          "signature": "hentJournalpostOpplysninger(String)",
+          "file": "frontend-api/src/main/java/no/nav/melosys/tjenester/gui/JournalfoeringController.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.tjenester.gui.JournalfoeringController.hentJournalpostOpplysninger(String)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.avgift.TrygdeavgiftService.harFakturerbarTrygdeavgiftEosPensjonist",
+      "intellij_signature": "TrygdeavgiftService.harFakturerbarTrygdeavgiftEosPensjonist(Behandlingsresultat, Boolean)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/TrygdeavgiftService.kt",
+      "callers": [
+        {
+          "signature": "TrygdeavgiftService.harFakturerbarTrygdeavgift(Behandlingsresultat, Boolean)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/TrygdeavgiftService.kt",
+          "usages": 1,
+          "tree_path": "TrygdeavgiftService.harFakturerbarTrygdeavgift(Behandlingsresultat, Boolean)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.dokument.brev.mapper.InnvilgelseFtrlMapper.mapPensjonistFrivillig",
+      "intellij_signature": "InnvilgelseFtrlMapper.mapPensjonistFrivillig(DokgenBrevbestilling)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/dokument/brev/mapper/InnvilgelseFtrlMapper.kt",
+      "callers": [
+        {
+          "signature": "DokgenMalMapper.lagDokgenDtoFraBestilling(DokgenBrevbestilling)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/dokument/brev/mapper/DokgenMalMapper.kt",
+          "usages": 1,
+          "tree_path": "DokgenMalMapper.lagDokgenDtoFraBestilling(DokgenBrevbestilling)"
+        },
+        {
+          "signature": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig med MINSTEBELØP beregningsregel mapper beregningsregel til DTO()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/brev/mapper/InnvilgelseFtrlPensjonistMapperTest.kt",
+          "usages": 1,
+          "tree_path": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig med MINSTEBELØP beregningsregel mapper beregningsregel til DTO()"
+        },
+        {
+          "signature": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig med ORDINÆR beregningsregel mapper ORDINÆR som beregningsregel()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/brev/mapper/InnvilgelseFtrlPensjonistMapperTest.kt",
+          "usages": 1,
+          "tree_path": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig med ORDINÆR beregningsregel mapper ORDINÆR som beregningsregel()"
+        },
+        {
+          "signature": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig med TJUEFEM_PROSENT_REGEL beregningsregel mapper beregningsregel til DTO()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/brev/mapper/InnvilgelseFtrlPensjonistMapperTest.kt",
+          "usages": 1,
+          "tree_path": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig med TJUEFEM_PROSENT_REGEL beregningsregel mapper beregningsregel til DTO()"
+        },
+        {
+          "signature": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig populerer felter TOGGLE av()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/brev/mapper/InnvilgelseFtrlPensjonistMapperTest.kt",
+          "usages": 1,
+          "tree_path": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig populerer felter TOGGLE av()"
+        },
+        {
+          "signature": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig populerer felter TOGGLE på()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/brev/mapper/InnvilgelseFtrlPensjonistMapperTest.kt",
+          "usages": 1,
+          "tree_path": "InnvilgelseFtrlPensjonistMapperTest.mapPensjonistFrivillig populerer felter TOGGLE på()"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.behandling.BehandlingsresultatService.oppdaterFritekster",
+      "intellij_signature": "BehandlingsresultatService.oppdaterFritekster(Long, String?, String?, String?)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/behandling/BehandlingsresultatService.kt",
+      "callers": [
+        {
+          "signature": "BehandlingsresultatControllerTest.oppdaterFritekster oppdaterer fritekster()",
+          "file": "frontend-api/src/test/kotlin/no/nav/melosys/tjenester/gui/BehandlingsresultatControllerTest.kt",
+          "usages": 1,
+          "tree_path": "BehandlingsresultatControllerTest.oppdaterFritekster oppdaterer fritekster()"
+        },
+        {
+          "signature": "BehandlingsresultatServiceTest.oppdaterFritekster_altOk_blirLagret()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/behandling/BehandlingsresultatServiceTest.kt",
+          "usages": 1,
+          "tree_path": "BehandlingsresultatServiceTest.oppdaterFritekster_altOk_blirLagret()"
+        },
+        {
+          "signature": "BehandlingsresultatServiceTest.oppdaterFritekster_kunBegrunnelse_blirLagretUtenFeil()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/behandling/BehandlingsresultatServiceTest.kt",
+          "usages": 1,
+          "tree_path": "BehandlingsresultatServiceTest.oppdaterFritekster_kunBegrunnelse_blirLagretUtenFeil()"
+        },
+        {
+          "signature": "IkkeYrkesaktivVedtakIT.ikke yrkesaktiv vedtak - eøs - innvigelse med bestemmelse FO_883_2004_ART11_2()",
+          "file": "integrasjonstest/src/test/kotlin/no/nav/melosys/itest/vedtak/IkkeYrkesaktivVedtakIT.kt",
+          "usages": 1,
+          "tree_path": "IkkeYrkesaktivVedtakIT.ikke yrkesaktiv vedtak - eøs - innvigelse med bestemmelse FO_883_2004_ART11_2()"
+        },
+        {
+          "signature": "IkkeYrkesaktivVedtakIT.ikke yrkesaktiv vedtak - eøs - innvigelse med bestemmelse FO_883_2004_ART11_3E - student()",
+          "file": "integrasjonstest/src/test/kotlin/no/nav/melosys/itest/vedtak/IkkeYrkesaktivVedtakIT.kt",
+          "usages": 1,
+          "tree_path": "IkkeYrkesaktivVedtakIT.ikke yrkesaktiv vedtak - eøs - innvigelse med bestemmelse FO_883_2004_ART11_3E - student()"
+        },
+        {
+          "signature": "IkkeYrkesaktivVedtakIT.ikke yrkesaktiv vedtak - trygdeavtale - Storbritania medl()",
+          "file": "integrasjonstest/src/test/kotlin/no/nav/melosys/itest/vedtak/IkkeYrkesaktivVedtakIT.kt",
+          "usages": 1,
+          "tree_path": "IkkeYrkesaktivVedtakIT.ikke yrkesaktiv vedtak - trygdeavtale - Storbritania medl()"
+        },
+        {
+          "signature": "oppdaterFritekster(long, LagreFritekstDto)",
+          "file": "frontend-api/src/main/java/no/nav/melosys/tjenester/gui/BehandlingsresultatController.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.tjenester.gui.BehandlingsresultatController.oppdaterFritekster(long, LagreFritekstDto)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.avgift.aarsavregning.ikkeskattepliktig.ÅrsavregningIkkeSkattepliktigeRepository.finnFTRLSaksnumre",
+      "intellij_signature": "ÅrsavregningIkkeSkattepliktigeRepository.finnFTRLSaksnumre(LocalDate, LocalDate, Instant, Instant)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ikkeskattepliktig/ÅrsavregningIkkeSkattepliktigeFinner.kt",
+      "callers": [
+        {
+          "signature": "ÅrsavregningIkkeSkattepliktigeFinner.finnSakerMedBehandlinger(LocalDate, LocalDate)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/ikkeskattepliktig/ÅrsavregningIkkeSkattepliktigeFinner.kt",
+          "usages": 1,
+          "tree_path": "ÅrsavregningIkkeSkattepliktigeFinner.finnSakerMedBehandlinger(LocalDate, LocalDate)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.avgift.aarsavregning.SkattepliktigAarsavregningOpprettelseService.finnAktivÅrsavregningBehandling",
+      "intellij_signature": "SkattepliktigAarsavregningOpprettelseService.finnAktivÅrsavregningBehandling(Fagsak, Int)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseService.kt",
+      "callers": [
+        {
+          "signature": "SkattehendelserConsumer.skalOpprettArsavregningsBehandlingProsessflyt(Fagsak, Int)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattehendelserConsumer.kt",
+          "usages": 1,
+          "tree_path": "SkattehendelserConsumer.skalOpprettArsavregningsBehandlingProsessflyt(Fagsak, Int)"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseServiceTest.aktiv årsavregning uten år gir ingen årsmatch()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseServiceTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseServiceTest.aktiv årsavregning uten år gir ingen årsmatch()"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseServiceTest.annet år eller avsluttet behandling gir ingen årsmatch(Boolean)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseServiceTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseServiceTest.annet år eller avsluttet behandling gir ingen årsmatch(Boolean)"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseServiceTest.behandling uten år skjuler ikke flere aktive årsmatcher()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseServiceTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseServiceTest.behandling uten år skjuler ikke flere aktive årsmatcher()"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseServiceTest.feil ved henting av behandlingsresultat videreføres()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseServiceTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseServiceTest.feil ved henting av behandlingsresultat videreføres()"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseServiceTest.finner behandling med år selv om en behandling uten år finnes(Boolean)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseServiceTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseServiceTest.finner behandling med år selv om en behandling uten år finnes(Boolean)"
+        },
+        {
+          "signature": "SkattepliktigAarsavregningOpprettelseServiceTest.manglende behandlingsresultat videreføres som oppslagsfeil()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/aarsavregning/SkattepliktigAarsavregningOpprettelseServiceTest.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigAarsavregningOpprettelseServiceTest.manglende behandlingsresultat videreføres som oppslagsfeil()"
+        },
+        {
+          "signature": "SkattepliktigeAarsavregningKjoering.kjør(Boolean, Int?, Boolean, SkattepliktigeAarsavregningKjoering.JobStatus.() -> List<SkattehendelseItem>)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/aarsavregning/skattepliktig/SkattepliktigeAarsavregningKjoering.kt",
+          "usages": 1,
+          "tree_path": "SkattepliktigeAarsavregningKjoering.kjør(Boolean, Int?, Boolean, SkattepliktigeAarsavregningKjoering.JobStatus.() -> List<SkattehendelseItem>)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.tjenester.gui.behandlinger.trygdeavgift.TrygdeavgiftController.hentBeregnetTrygdeavgift",
+      "intellij_signature": "TrygdeavgiftController.hentBeregnetTrygdeavgift(Long)",
+      "file": "frontend-api/src/main/kotlin/no/nav/melosys/tjenester/gui/behandlinger/trygdeavgift/TrygdeavgiftController.kt",
+      "callers": []
+    },
+    {
+      "qualified_name": "no.nav.melosys.tjenester.gui.ftrl.medlemskapsperiode.MedlemskapsperiodeController.oppdaterMedlemskapsperiode",
+      "intellij_signature": "MedlemskapsperiodeController.oppdaterMedlemskapsperiode(Long, Long, MedlemskapsperiodeOppdateringDto)",
+      "file": "frontend-api/src/main/kotlin/no/nav/melosys/tjenester/gui/ftrl/medlemskapsperiode/MedlemskapsperiodeController.kt",
+      "callers": []
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.behandling.ReplikerBehandlingsresultatService.filtrerTrygdeavgiftsperioder",
+      "intellij_signature": "ReplikerBehandlingsresultatService.filtrerTrygdeavgiftsperioder(Collection<Trygdeavgiftsperiode>)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/behandling/ReplikerBehandlingsresultatService.kt",
+      "callers": [
+        {
+          "signature": "ReplikerBehandlingsresultatService.replikerTrygdeavgift(Behandlingsresultat, Behandlingsresultat)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/behandling/ReplikerBehandlingsresultatService.kt",
+          "usages": 1,
+          "tree_path": "ReplikerBehandlingsresultatService.replikerTrygdeavgift(Behandlingsresultat, Behandlingsresultat)"
+        },
+        {
+          "signature": "ReplikerBehandlingsresultatService.replikerTrygdeavgiftForPensjonist(Behandlingsresultat, Behandlingsresultat)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/behandling/ReplikerBehandlingsresultatService.kt",
+          "usages": 1,
+          "tree_path": "ReplikerBehandlingsresultatService.replikerTrygdeavgiftForPensjonist(Behandlingsresultat, Behandlingsresultat)"
+        },
+        {
+          "signature": "ReplikerBehandlingsresultatServiceTest.filtrerTrygdeavgiftsperioder med toggle AV - returnerer alle perioder uendret()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/behandling/ReplikerBehandlingsresultatServiceTest.kt",
+          "usages": 1,
+          "tree_path": "ReplikerBehandlingsresultatServiceTest.filtrerTrygdeavgiftsperioder med toggle AV - returnerer alle perioder uendret()"
+        },
+        {
+          "signature": "ReplikerBehandlingsresultatServiceTest.filtrerTrygdeavgiftsperioder med toggle PA - feiler når trygdeavgiftsperiode går over flere år()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/behandling/ReplikerBehandlingsresultatServiceTest.kt",
+          "usages": 1,
+          "tree_path": "ReplikerBehandlingsresultatServiceTest.filtrerTrygdeavgiftsperioder med toggle PA - feiler når trygdeavgiftsperiode går over flere år()"
+        },
+        {
+          "signature": "ReplikerBehandlingsresultatServiceTest.filtrerTrygdeavgiftsperioder med toggle PA - filtrerer bort perioder som slutter før inneværende år()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/behandling/ReplikerBehandlingsresultatServiceTest.kt",
+          "usages": 1,
+          "tree_path": "ReplikerBehandlingsresultatServiceTest.filtrerTrygdeavgiftsperioder med toggle PA - filtrerer bort perioder som slutter før inneværende år()"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.oppgave.OppgaveMigreringAdminController.migrerOppgaveIdPaBehandling",
+      "intellij_signature": "OppgaveMigreringAdminController.migrerOppgaveIdPaBehandling(Boolean, OppgaveMigrering.Options)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/oppgave/OppgaveMigreringAdminController.kt",
+      "callers": []
+    },
+    {
+      "qualified_name": "no.nav.melosys.tjenester.gui.aarsavregning.ÅrsavregningListController.hentAvregninger",
+      "intellij_signature": "ÅrsavregningListController.hentAvregninger(String, Int?, Behandlingsresultattyper?)",
+      "file": "frontend-api/src/main/kotlin/no/nav/melosys/tjenester/gui/aarsavregning/ÅrsavregningListController.kt",
+      "callers": []
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.avgift.satsendring.SatsendringFinner.finnBehandlingerMedSatsendring",
+      "intellij_signature": "SatsendringFinner.finnBehandlingerMedSatsendring(Int)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinner.kt",
+      "callers": [
+        {
+          "signature": "SatsendringAdminController.lagRapport(Int)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringAdminController.kt",
+          "usages": 1,
+          "tree_path": "SatsendringAdminController.lagRapport(Int)"
+        },
+        {
+          "signature": "SatsendringAdminController.opprettSatsendring(Int, String)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringAdminController.kt",
+          "usages": 1,
+          "tree_path": "SatsendringAdminController.opprettSatsendring(Int, String)"
+        },
+        {
+          "signature": "SatsendringAdminControllerTest.Hent satsendringer for spesifikt år()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringAdminControllerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringAdminControllerTest.Hent satsendringer for spesifikt år()"
+        },
+        {
+          "signature": "SatsendringAdminControllerTest.Oppretter prosessinstans for satsendringsbehandling()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringAdminControllerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringAdminControllerTest.Oppretter prosessinstans for satsendringsbehandling()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo førstegang og ny vurdering er avsluttet, men ny vurdering har ikke fakturerbar trygdeavgift - ingen resultat()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo førstegang og ny vurdering er avsluttet, men ny vurdering har ikke fakturerbar trygdeavgift - ingen resultat()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo førstegangsbehandling med 2 trygdeavgiftsperioder i ulik rekkefølge som er like, ingen satsendring()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo førstegangsbehandling med 2 trygdeavgiftsperioder i ulik rekkefølge som er like, ingen satsendring()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo ingen resultat når fagsak er annulert()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo ingen resultat når fagsak er annulert()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo kun åpen førstegangsbehandling - ingen resultat()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo kun åpen førstegangsbehandling - ingen resultat()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo når det feiler mot beregn trygdeavgift()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo når det feiler mot beregn trygdeavgift()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes 2 avsluttede behandlinger på samme sak - sist registrert blir valg()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes 2 avsluttede behandlinger på samme sak - sist registrert blir valg()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes 2 avsluttede behandlinger på samme sak og en åpen()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes 2 avsluttede behandlinger på samme sak og en åpen()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes 2 saker med en førstegang og en ny vurdering - 2 behandlinger kommer i resultat()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes 2 saker med en førstegang og en ny vurdering - 2 behandlinger kommer i resultat()"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes både satsendring og en aktiv ny vurdering i en sak(Behandlingstyper)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo når det finnes både satsendring og en aktiv ny vurdering i en sak(Behandlingstyper)"
+        },
+        {
+          "signature": "SatsendringFinnerTest.AvgiftSatsendringInfo, ingen satsendring når trygdeavgift for året som sjekkes er likt, mens et annet år er forskjellig()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringFinnerTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringFinnerTest.AvgiftSatsendringInfo, ingen satsendring når trygdeavgift for året som sjekkes er likt, mens et annet år er forskjellig()"
+        },
+        {
+          "signature": "SatsendringIT.Finn satsendring etter yrkesaktiv FTRL vedtak med ny vurdering()",
+          "file": "integrasjonstest/src/test/kotlin/no/nav/melosys/itest/vedtak/satsendring/SatsendringIT.kt",
+          "usages": 1,
+          "tree_path": "SatsendringIT.Finn satsendring etter yrkesaktiv FTRL vedtak med ny vurdering()"
+        },
+        {
+          "signature": "SatsendringIT.Finn satsendring etter yrkesaktiv FTRL vedtak()",
+          "file": "integrasjonstest/src/test/kotlin/no/nav/melosys/itest/vedtak/satsendring/SatsendringIT.kt",
+          "usages": 1,
+          "tree_path": "SatsendringIT.Finn satsendring etter yrkesaktiv FTRL vedtak()"
+        },
+        {
+          "signature": "SatsendringProsessGenerator.opprettSatsendringsprosesserForÅr(Int, Boolean, Int)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringProsessGenerator.kt",
+          "usages": 1,
+          "tree_path": "SatsendringProsessGenerator.opprettSatsendringsprosesserForÅr(Int, Boolean, Int)"
+        },
+        {
+          "signature": "SatsendringProsessGeneratorTest.opprettSatsendringProsesserForAar med dry run skal ikke opprette prosesser()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringProsessGeneratorTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringProsessGeneratorTest.opprettSatsendringProsesserForAar med dry run skal ikke opprette prosesser()"
+        },
+        {
+          "signature": "SatsendringProsessGeneratorTest.opprettSatsendringProsesserForAar skal opprette prosesser for behandlinger med satsendring()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/avgift/satsendring/SatsendringProsessGeneratorTest.kt",
+          "usages": 1,
+          "tree_path": "SatsendringProsessGeneratorTest.opprettSatsendringProsesserForAar skal opprette prosesser for behandlinger med satsendring()"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.lovligekombinasjoner.LovligeKombinasjonerSaksbehandlingService.hentMuligeBehandlingsårsaktyper",
+      "intellij_signature": "LovligeKombinasjonerSaksbehandlingService.hentMuligeBehandlingsårsaktyper(Behandlingstyper)",
+      "file": "service/src/main/kotlin/no/nav/melosys/service/lovligekombinasjoner/LovligeKombinasjonerSaksbehandlingService.kt",
+      "callers": [
+        {
+          "signature": "LovligeKombinasjonerSaksbehandlingServiceTest.hentMuligeBehandlingsårsaktyper_behandlingstypeErAnnetEnnManglendeInnbetalingTrygdeavgift()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/lovligekombinasjoner/LovligeKombinasjonerSaksbehandlingServiceTest.kt",
+          "usages": 1,
+          "tree_path": "LovligeKombinasjonerSaksbehandlingServiceTest.hentMuligeBehandlingsårsaktyper_behandlingstypeErAnnetEnnManglendeInnbetalingTrygdeavgift()"
+        },
+        {
+          "signature": "LovligeKombinasjonerSaksbehandlingServiceTest.hentMuligeBehandlingsårsaktyper_behandlingstypeErManglendeInnbetalingTrygdeavgift()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/lovligekombinasjoner/LovligeKombinasjonerSaksbehandlingServiceTest.kt",
+          "usages": 1,
+          "tree_path": "LovligeKombinasjonerSaksbehandlingServiceTest.hentMuligeBehandlingsårsaktyper_behandlingstypeErManglendeInnbetalingTrygdeavgift()"
+        },
+        {
+          "signature": "hentAlleMuligeBehandlingsårsaktyper(Behandlingstyper)",
+          "file": "frontend-api/src/main/java/no/nav/melosys/tjenester/gui/saksbehandling/LovligeKombinasjonerSaksbehandlingController.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.tjenester.gui.saksbehandling.LovligeKombinasjonerSaksbehandlingController.hentAlleMuligeBehandlingsårsaktyper(Behandlingstyper)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.utpeking.UtpekingService.oppdaterSendtUtland",
+      "intellij_signature": "oppdaterSendtUtland(Utpekingsperiode)",
+      "file": "service/src/main/java/no/nav/melosys/service/utpeking/UtpekingService.java",
+      "callers": [
+        {
+          "signature": "oppdaterSendtUtland alleredeSendtUtland kasterException()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/utpeking/UtpekingServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtpekingServiceTest.oppdaterSendtUtland alleredeSendtUtland kasterException()"
+        },
+        {
+          "signature": "oppdaterSendtUtland ikkePersistert kasterException()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/utpeking/UtpekingServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtpekingServiceTest.oppdaterSendtUtland ikkePersistert kasterException()"
+        },
+        {
+          "signature": "oppdaterSendtUtland ikkeSattFraFør oppdateres()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/utpeking/UtpekingServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtpekingServiceTest.oppdaterSendtUtland ikkeSattFraFør oppdateres()"
+        },
+        {
+          "signature": "setUp()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/iv/SendVedtakUtlandTest.kt",
+          "usages": 1,
+          "tree_path": "SendVedtakUtlandTest.setUp()"
+        },
+        {
+          "signature": "utfør(Prosessinstans)",
+          "file": "saksflyt/src/main/java/no/nav/melosys/saksflyt/steg/sed/SendVedtakUtland.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.saksflyt.steg.sed.SendVedtakUtland.utfør(Prosessinstans)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.tjenester.gui.DokumentController.hentDokument",
+      "intellij_signature": "hentDokument(String, String)",
+      "file": "frontend-api/src/main/java/no/nav/melosys/tjenester/gui/DokumentController.java",
+      "callers": []
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.dokument.sed.EessiService.landErEessiReady",
+      "intellij_signature": "landErEessiReady(String, String)",
+      "file": "service/src/main/java/no/nav/melosys/service/dokument/sed/EessiService.java",
+      "callers": [
+        {
+          "signature": "landErEessiReady(String, Collection<Land_iso2>)",
+          "file": "service/src/main/java/no/nav/melosys/service/dokument/sed/EessiService.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.dokument.sed.EessiService.landErEessiReady(String, Collection<Land_iso2>)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.dokument.sed.EessiService.landErEessiReady",
+      "intellij_signature": "landErEessiReady(String, Collection<Land_iso2>)",
+      "file": "service/src/main/java/no/nav/melosys/service/dokument/sed/EessiService.java",
+      "callers": [
+        {
+          "signature": "avklarMottakerInstitusjoner(Prosessinstans, Behandling)",
+          "file": "saksflyt/src/main/java/no/nav/melosys/saksflyt/steg/sed/HentMottakerinstitusjonerForkortetPeriode.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.saksflyt.steg.sed.HentMottakerinstitusjonerForkortetPeriode.avklarMottakerInstitusjoner(Prosessinstans, Behandling)"
+        },
+        {
+          "signature": "landErEessiReady toLandAlleErEessiReady forventTrue()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/sed/EessiServiceTest.kt",
+          "usages": 1,
+          "tree_path": "EessiServiceTest.landErEessiReady toLandAlleErEessiReady forventTrue()"
+        },
+        {
+          "signature": "landErEessiReady toLandEtErEessiReady forventFalse()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/dokument/sed/EessiServiceTest.kt",
+          "usages": 1,
+          "tree_path": "EessiServiceTest.landErEessiReady toLandEtErEessiReady forventFalse()"
+        },
+        {
+          "signature": "utfør skal ikke sette mottaker institusjoner når ikke EESSI ready()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/sed/HentMottakerinstitusjonerForkortetPeriodeTest.kt",
+          "usages": 1,
+          "tree_path": "HentMottakerinstitusjonerForkortetPeriodeTest.utfør skal ikke sette mottaker institusjoner når ikke EESSI ready()"
+        },
+        {
+          "signature": "utfør skal kaste exception når er EESSI ready men finner ingen BUC()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/sed/HentMottakerinstitusjonerForkortetPeriodeTest.kt",
+          "usages": 1,
+          "tree_path": "HentMottakerinstitusjonerForkortetPeriodeTest.utfør skal kaste exception når er EESSI ready men finner ingen BUC()"
+        },
+        {
+          "signature": "utfør skal sette mottaker institusjoner når har tidligere BUC()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/sed/HentMottakerinstitusjonerForkortetPeriodeTest.kt",
+          "usages": 1,
+          "tree_path": "HentMottakerinstitusjonerForkortetPeriodeTest.utfør skal sette mottaker institusjoner når har tidligere BUC()"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.persondata.PersondataService.hentPersonMedHistorikk",
+      "intellij_signature": "hentPersonMedHistorikk(long)",
+      "file": "service/src/main/java/no/nav/melosys/service/persondata/PersondataService.java",
+      "callers": [
+        {
+          "signature": "get med BehandlingID returner data()",
+          "file": "frontend-api/src/test/kotlin/no/nav/melosys/tjenester/gui/graphql/PersonopplysningerDataFetcherTest.kt",
+          "usages": 1,
+          "tree_path": "PersonopplysningerDataFetcherTest.get med BehandlingID returner data()"
+        },
+        {
+          "signature": "get(DataFetchingEnvironment)",
+          "file": "frontend-api/src/main/kotlin/no/nav/melosys/tjenester/gui/graphql/PersonopplysningerDataFetcher.kt",
+          "usages": 1,
+          "tree_path": "PersonopplysningerDataFetcher.get(DataFetchingEnvironment)"
+        },
+        {
+          "signature": "hentPersonMedHistorikk aktiv behandling konvertering ok()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/persondata/PersondataServiceTest.kt",
+          "usages": 2,
+          "tree_path": "PersondataServiceTest.hentPersonMedHistorikk aktiv behandling konvertering ok()"
+        },
+        {
+          "signature": "hentPersonMedHistorikk inaktiv behandling TPS data lagret returnerer data fra TPS()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/persondata/PersondataServiceTest.kt",
+          "usages": 2,
+          "tree_path": "PersondataServiceTest.hentPersonMedHistorikk inaktiv behandling TPS data lagret returnerer data fra TPS()"
+        },
+        {
+          "signature": "hentPersonMedHistorikk inaktiv behandling inaktiv behandling fra før PDL()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/persondata/PersondataServiceTest.kt",
+          "usages": 2,
+          "tree_path": "PersondataServiceTest.hentPersonMedHistorikk inaktiv behandling inaktiv behandling fra før PDL()"
+        },
+        {
+          "signature": "hentPersonMedHistorikk inaktiv behandling returnerer data fra PDL()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/persondata/PersondataServiceTest.kt",
+          "usages": 2,
+          "tree_path": "PersondataServiceTest.hentPersonMedHistorikk inaktiv behandling returnerer data fra PDL()"
+        },
+        {
+          "signature": "setupMockedTestData(boolean)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/kontroll/feature/ufm/UfmKontrollServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UfmKontrollServiceTest.setupMockedTestData(boolean)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.persondata.PersondataService.hentPersonMedHistorikk",
+      "intellij_signature": "hentPersonMedHistorikk(String)",
+      "file": "service/src/main/java/no/nav/melosys/service/persondata/PersondataService.java",
+      "callers": [
+        {
+          "signature": "get med ident returner data()",
+          "file": "frontend-api/src/test/kotlin/no/nav/melosys/tjenester/gui/graphql/PersonopplysningerDataFetcherTest.kt",
+          "usages": 1,
+          "tree_path": "PersonopplysningerDataFetcherTest.get med ident returner data()"
+        },
+        {
+          "signature": "get(DataFetchingEnvironment)",
+          "file": "frontend-api/src/main/kotlin/no/nav/melosys/tjenester/gui/graphql/PersonopplysningerDataFetcher.kt",
+          "usages": 1,
+          "tree_path": "PersonopplysningerDataFetcher.get(DataFetchingEnvironment)"
+        },
+        {
+          "signature": "hentPersonMedHistorikk(long)",
+          "file": "service/src/main/java/no/nav/melosys/service/persondata/PersondataService.java",
+          "usages": 2,
+          "tree_path": "no.nav.melosys.service.persondata.PersondataService.hentPersonMedHistorikk(long)"
+        },
+        {
+          "signature": "lagUfmKontrollData(Behandling, List<PersonhistorikkDokument>, SedDokument)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/kontroll/feature/ufm/UfmKontrollService.kt",
+          "usages": 1,
+          "tree_path": "UfmKontrollService.lagUfmKontrollData(Behandling, List<PersonhistorikkDokument>, SedDokument)"
+        },
+        {
+          "signature": "lagreHvisMangler(long)",
+          "file": "service/src/main/kotlin/no/nav/melosys/service/saksopplysninger/PersonopplysningerLagrer.kt",
+          "usages": 1,
+          "tree_path": "PersonopplysningerLagrer.lagreHvisMangler(long)"
+        },
+        {
+          "signature": "lagrer PDL_PERS_SAKS når det mangler()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/saksopplysninger/PersonopplysningerLagrerTest.kt",
+          "usages": 1,
+          "tree_path": "Når hovedpart er BRUKER.lagrer PDL_PERS_SAKS når det mangler()"
+        },
+        {
+          "signature": "lagrer begge saksopplysningstyper når begge mangler()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/saksopplysninger/PersonopplysningerLagrerTest.kt",
+          "usages": 1,
+          "tree_path": "Når hovedpart er BRUKER.lagrer begge saksopplysningstyper når begge mangler()"
+        },
+        {
+          "signature": "setupMockedTestData(boolean)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/kontroll/feature/ufm/UfmKontrollServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UfmKontrollServiceTest.setupMockedTestData(boolean)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.aktoer.UtenlandskMyndighetService.avklarUtenlandskMyndighetSomAktørOgLagre",
+      "intellij_signature": "avklarUtenlandskMyndighetSomAktørOgLagre(Behandling)",
+      "file": "service/src/main/java/no/nav/melosys/service/aktoer/UtenlandskMyndighetService.java",
+      "callers": [
+        {
+          "signature": "avklarUtenlandskMyndighetSomAktørOgLagre_forventkorrektInstitusjonsId()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/aktoer/UtenlandskMyndighetServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtenlandskMyndighetServiceTest.avklarUtenlandskMyndighetSomAktørOgLagre_forventkorrektInstitusjonsId()"
+        },
+        {
+          "signature": "avklarUtenlandskMyndighetSomAktørOgLagre_kasterFunksjonellException_nårDetErFlereLandkoder()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/aktoer/UtenlandskMyndighetServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtenlandskMyndighetServiceTest.avklarUtenlandskMyndighetSomAktørOgLagre_kasterFunksjonellException_nårDetErFlereLandkoder()"
+        },
+        {
+          "signature": "avklarUtenlandskMyndighetSomAktørOgLagre_kasterIkkeFunnetException_nårUtenlandskmyndighetIkkeErFunnet()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/aktoer/UtenlandskMyndighetServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtenlandskMyndighetServiceTest.avklarUtenlandskMyndighetSomAktørOgLagre_kasterIkkeFunnetException_nårUtenlandskmyndighetIkkeErFunnet()"
+        },
+        {
+          "signature": "avklarUtenlandskMyndighetSomAktørOgLagre_oppdatererMyndighetForTrygdeavtale()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/aktoer/UtenlandskMyndighetServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtenlandskMyndighetServiceTest.avklarUtenlandskMyndighetSomAktørOgLagre_oppdatererMyndighetForTrygdeavtale()"
+        },
+        {
+          "signature": "avklarUtenlandskMyndighetSomAktørOgLagre_oppdatererMyndigheterForEuEos()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/aktoer/UtenlandskMyndighetServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtenlandskMyndighetServiceTest.avklarUtenlandskMyndighetSomAktørOgLagre_oppdatererMyndigheterForEuEos()"
+        },
+        {
+          "signature": "avklarUtenlandskMyndighetSomAktørOgLagre_oppdatererMyndigheterMedRiktigId()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/aktoer/UtenlandskMyndighetServiceTest.kt",
+          "usages": 1,
+          "tree_path": "UtenlandskMyndighetServiceTest.avklarUtenlandskMyndighetSomAktørOgLagre_oppdatererMyndigheterMedRiktigId()"
+        },
+        {
+          "signature": "utfør utenMyndighet myndighetOpprettes()",
+          "file": "saksflyt/src/test/kotlin/no/nav/melosys/saksflyt/steg/behandling/AvklarMyndighetTest.kt",
+          "usages": 2,
+          "tree_path": "AvklarMyndighetTest.utfør utenMyndighet myndighetOpprettes()"
+        },
+        {
+          "signature": "utfør(Prosessinstans)",
+          "file": "saksflyt/src/main/java/no/nav/melosys/saksflyt/steg/behandling/AvklarMyndighet.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.saksflyt.steg.behandling.AvklarMyndighet.utfør(Prosessinstans)"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.saksflytapi.ProsessinstansService.opprettProsessinstansSedJournalføring",
+      "intellij_signature": "opprettProsessinstansSedJournalføring(Behandling, MelosysEessiMelding)",
+      "file": "saksflyt-api/src/main/java/no/nav/melosys/saksflytapi/ProsessinstansService.java",
+      "callers": [
+        {
+          "signature": "bestemManuellBehandling X009PurringSaksnummerOgFagsakEksisterer oppdatererPrioritet()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/DefaultSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "DefaultSedRuterTest.bestemManuellBehandling X009PurringSaksnummerOgFagsakEksisterer oppdatererPrioritet()"
+        },
+        {
+          "signature": "bestemManuellBehandling behandlingAvsluttet opprettJournalforingsOppgave()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/DefaultSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "DefaultSedRuterTest.bestemManuellBehandling behandlingAvsluttet opprettJournalforingsOppgave()"
+        },
+        {
+          "signature": "bestemManuellBehandling behandlingOpprettetOgSkalBehandleSED opprettOppgave()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/DefaultSedRuterTest.kt",
+          "usages": 2,
+          "tree_path": "DefaultSedRuterTest.bestemManuellBehandling behandlingOpprettetOgSkalBehandleSED opprettOppgave()"
+        },
+        {
+          "signature": "finnSakOgBestemRuting anmodningsperiodeSvarRegistrert verifiserKorrektResultat()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/SvarAnmodningUnntakSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "SvarAnmodningUnntakSedRuterTest.finnSakOgBestemRuting anmodningsperiodeSvarRegistrert verifiserKorrektResultat()"
+        },
+        {
+          "signature": "finnSakOgBestemRuting behandlingstypeFørstegangIkkeYrkesaktiv oppgaveOppdateres()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/SvarAnmodningUnntakSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "SvarAnmodningUnntakSedRuterTest.finnSakOgBestemRuting behandlingstypeFørstegangIkkeYrkesaktiv oppgaveOppdateres()"
+        },
+        {
+          "signature": "finnSakOgBestemRuting oppdatertSedPåEksisterendeSakIkkeEndretIngenLovvalgsLand skalIkkeBehandles()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/UnntaksperiodeSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "UnntaksperiodeSedRuterTest.finnSakOgBestemRuting oppdatertSedPåEksisterendeSakIkkeEndretIngenLovvalgsLand skalIkkeBehandles()"
+        },
+        {
+          "signature": "finnSakOgBestemRuting oppdatertSedPåEksisterendeSakIkkeEndretPeriode skalIkkeBehandles()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/UnntaksperiodeSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "UnntaksperiodeSedRuterTest.finnSakOgBestemRuting oppdatertSedPåEksisterendeSakIkkeEndretPeriode skalIkkeBehandles()"
+        },
+        {
+          "signature": "finnSakOgBestemRuting sakEksistererPeriodeIkkeEndret ikkeNyBehandling()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AnmodningOmUnntakSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AnmodningOmUnntakSedRuterTest.finnSakOgBestemRuting sakEksistererPeriodeIkkeEndret ikkeNyBehandling()"
+        },
+        {
+          "signature": "finnSakOgBestemRuting_annetLandUtpektNyttTemaAnnetLandUtpektSammePeriode_forventIngenBehandling()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/ArbeidFlereLandSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "ArbeidFlereLandSedRuterTest.finnSakOgBestemRuting_annetLandUtpektNyttTemaAnnetLandUtpektSammePeriode_forventIngenBehandling()"
+        },
+        {
+          "signature": "opprettJournalføringProsess(MelosysEessiMelding, Behandling)",
+          "file": "service/src/main/java/no/nav/melosys/service/eessi/ruting/AdminSedRuter.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.eessi.ruting.AdminSedRuter.opprettJournalføringProsess(MelosysEessiMelding, Behandling)"
+        },
+        {
+          "signature": "opprettJournalføringProsess(MelosysEessiMelding, Behandling)",
+          "file": "service/src/main/java/no/nav/melosys/service/eessi/ruting/AnmodningOmUnntakSedRuter.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.eessi.ruting.AnmodningOmUnntakSedRuter.opprettJournalføringProsess(MelosysEessiMelding, Behandling)"
+        },
+        {
+          "signature": "opprettJournalføringProsess(MelosysEessiMelding, Behandling)",
+          "file": "service/src/main/java/no/nav/melosys/service/eessi/ruting/ArbeidFlereLandSedRuter.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.eessi.ruting.ArbeidFlereLandSedRuter.opprettJournalføringProsess(MelosysEessiMelding, Behandling)"
+        },
+        {
+          "signature": "opprettJournalføringProsess(MelosysEessiMelding, Behandling)",
+          "file": "service/src/main/java/no/nav/melosys/service/eessi/ruting/DefaultSedRuter.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.eessi.ruting.DefaultSedRuter.opprettJournalføringProsess(MelosysEessiMelding, Behandling)"
+        },
+        {
+          "signature": "opprettJournalføringProsess(MelosysEessiMelding, Behandling)",
+          "file": "service/src/main/java/no/nav/melosys/service/eessi/ruting/SvarAnmodningUnntakSedRuter.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.eessi.ruting.SvarAnmodningUnntakSedRuter.opprettJournalføringProsess(MelosysEessiMelding, Behandling)"
+        },
+        {
+          "signature": "opprettJournalføringProsess(MelosysEessiMelding, Behandling)",
+          "file": "service/src/main/java/no/nav/melosys/service/eessi/ruting/UnntaksperiodeSedRuter.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.eessi.ruting.UnntaksperiodeSedRuter.opprettJournalføringProsess(MelosysEessiMelding, Behandling)"
+        },
+        {
+          "signature": "opprettSedMottakRutingTest(OpprettSedDokument)",
+          "file": "integrasjonstest/src/test/kotlin/no/nav/melosys/itest/SedLåsMedSubProsesserIT.kt",
+          "usages": 2,
+          "tree_path": "TestConfig.opprettSedMottakRutingTest(OpprettSedDokument)"
+        },
+        {
+          "signature": "rutSedTilBehandling SedTyperSaksnummerOgFagsakEksistererStatusMidlertidigLovvalgsbeslutning ikkeOppdaterStatusEllerOppgave(SedType)",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/DefaultSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "DefaultSedRuterTest.rutSedTilBehandling SedTyperSaksnummerOgFagsakEksistererStatusMidlertidigLovvalgsbeslutning ikkeOppdaterStatusEllerOppgave(SedType)"
+        },
+        {
+          "signature": "rutSedTilBehandling erIkkeX006MottakerPåÅpenA003 blirIkkeAvsluttetEllerSattTilAnnullert()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AdminFjernmottakerSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AdminFjernmottakerSedRuterTest.rutSedTilBehandling erIkkeX006MottakerPåÅpenA003 blirIkkeAvsluttetEllerSattTilAnnullert()"
+        },
+        {
+          "signature": "rutSedTilBehandling erX006MottakerErIkkeTilstedePåSed opprettJournalFøringsProsess()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AdminFjernmottakerSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AdminFjernmottakerSedRuterTest.rutSedTilBehandling erX006MottakerErIkkeTilstedePåSed opprettJournalFøringsProsess()"
+        },
+        {
+          "signature": "rutSedTilBehandling erX006MottakerPåAvsluttetBehandling oppdaterStatusPåFagsakTilAnnulert()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AdminFjernmottakerSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AdminFjernmottakerSedRuterTest.rutSedTilBehandling erX006MottakerPåAvsluttetBehandling oppdaterStatusPåFagsakTilAnnulert()"
+        },
+        {
+          "signature": "rutSedTilBehandling erX006MottakerPåÅpenA003 blirAvsluttetOgSattTilAnnullert()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AdminFjernmottakerSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AdminFjernmottakerSedRuterTest.rutSedTilBehandling erX006MottakerPåÅpenA003 blirAvsluttetOgSattTilAnnullert()"
+        },
+        {
+          "signature": "rutSedTilBehandling skal sette behandlingsstatus til VURDER_DOKUMENT når tilhørende fagsak finnes og behandling er Norge utpekt og aktiv()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AdminInnvalideringSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AdminInnvalideringSedRuterTest.rutSedTilBehandling skal sette behandlingsstatus til VURDER_DOKUMENT når tilhørende fagsak finnes og behandling er Norge utpekt og aktiv()"
+        },
+        {
+          "signature": "rutSedTilBehandling tilhørendeFagsakFinnesOgBehandlingErNorgeUtpektAktiv behandlingsstausVURDER_DOKUMENT()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/eessi/AdminFjernmottakerSedRuterTest.kt",
+          "usages": 1,
+          "tree_path": "AdminFjernmottakerSedRuterTest.rutSedTilBehandling tilhørendeFagsakFinnesOgBehandlingErNorgeUtpektAktiv behandlingsstausVURDER_DOKUMENT()"
+        }
+      ]
+    },
+    {
+      "qualified_name": "no.nav.melosys.service.medl.MedlAnmodningsperiodeService.lagreAnmodningsperiode",
+      "intellij_signature": "lagreAnmodningsperiode(Anmodningsperiode)",
+      "file": "service/src/main/java/no/nav/melosys/service/medl/MedlAnmodningsperiodeService.java",
+      "callers": [
+        {
+          "signature": "lagreMedlPeriodeId(Long, PeriodeOmLovvalg, long)",
+          "file": "service/src/main/java/no/nav/melosys/service/medl/MedlPeriodeService.java",
+          "usages": 1,
+          "tree_path": "no.nav.melosys.service.medl.MedlPeriodeService.lagreMedlPeriodeId(Long, PeriodeOmLovvalg, long)"
+        },
+        {
+          "signature": "opprettPeriodeUnderAvklaring()",
+          "file": "service/src/test/kotlin/no/nav/melosys/service/medl/MedlPeriodeServiceTest.kt",
+          "usages": 1,
+          "tree_path": "MedlPeriodeServiceTest.opprettPeriodeUnderAvklaring()"
+        }
+      ]
+    }
+  ]
+}

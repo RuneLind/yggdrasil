@@ -10,6 +10,7 @@
     "embed": "bun run src/cli.ts embed",
     "search": "bun run src/cli.ts search",
     "db:migrate": "bun run scripts/migrate.ts",
+    "eval:callers": "bun run scripts/eval-callers.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

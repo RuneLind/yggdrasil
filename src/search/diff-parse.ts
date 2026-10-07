@@ -19,6 +19,53 @@ function stripDiffPrefix(path: string): string {
   return path.startsWith("a/") || path.startsWith("b/") ? path.slice(2) : path;
 }
 
+const SIMPLE_ESCAPES: Record<string, number> = {
+  "\\": 0x5c, '"': 0x22, t: 0x09, n: 0x0a, r: 0x0d, a: 0x07, b: 0x08, f: 0x0c, v: 0x0b,
+};
+
+/**
+ * Undo git's C-style path quoting (`core.quotePath`, on by default): `"b/\303\205rs.kt"`.
+ * Octal escapes are UTF-8 *bytes*, so they are collected into a byte buffer and decoded
+ * together; decoding each escape to its own char would turn Å into "Ã\x85".
+ * detect-changes runs git with quotePath off; this is the guard for diffs from elsewhere.
+ */
+export function unquoteGitPath(path: string): string {
+  if (path.length < 2 || !path.startsWith('"') || !path.endsWith('"')) return path;
+  // Code points, not UTF-16 units: with quotePath off git still quotes a path that
+  // contains `"` or a control char, and leaves its non-ASCII text (emoji included) raw.
+  const chars = Array.from(path.slice(1, -1));
+  const bytes: number[] = [];
+  const utf8 = new TextEncoder();
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch !== "\\" || i + 1 >= chars.length) {
+      bytes.push(...utf8.encode(ch));
+      continue;
+    }
+    const next = chars[i + 1];
+    const octal = chars.slice(i + 1, i + 4).join("");
+    if (/^[0-3][0-7]{2}$/.test(octal)) {
+      bytes.push(parseInt(octal, 8));
+      i += 3;
+    } else if (Object.hasOwn(SIMPLE_ESCAPES, next)) {
+      bytes.push(SIMPLE_ESCAPES[next]);
+      i += 1;
+    } else {
+      bytes.push(0x5c);
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+/**
+ * Header path → repo-relative path. git appends a TAB to a `---`/`+++` path that holds a
+ * space (`+++ b/a b.kt\t`, `+++ "b/\303\205 b.kt"\t`), so drop that first; then unquote,
+ * since the a/ b/ prefix sits inside the quotes.
+ */
+function headerPath(raw: string): string {
+  return stripDiffPrefix(unquoteGitPath(raw.endsWith("\t") ? raw.slice(0, -1) : raw));
+}
+
 /**
  * Parse unified-diff text (expects `--unified=0`, but tolerates context counts).
  *
@@ -54,13 +101,13 @@ export function parseGitDiff(text: string): DiffSummary {
 
     if (inHeader && line.startsWith("--- ")) {
       // Old-side path. "/dev/null" means a newly added file (no old path).
-      pendingOldFile = line.startsWith("--- /dev/null") ? null : stripDiffPrefix(line.slice(4));
+      pendingOldFile = line.startsWith("--- /dev/null") ? null : headerPath(line.slice(4));
       continue;
     }
 
     if (inHeader && line.startsWith("+++ ")) {
       // New-side path. "/dev/null" means a deleted file — fall back to the old path.
-      currentFile = line.startsWith("+++ /dev/null") ? pendingOldFile : stripDiffPrefix(line.slice(4));
+      currentFile = line.startsWith("+++ /dev/null") ? pendingOldFile : headerPath(line.slice(4));
       if (currentFile && !files.has(currentFile)) files.set(currentFile, new Set());
       inHeader = false;
       continue;

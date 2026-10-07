@@ -1,7 +1,7 @@
-import { describe, test, expect, afterAll } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { hybridSearch } from "../src/search/hybrid-search.ts";
 import { SearchTracer } from "../src/tracing/trace.ts";
-import { sql, closeDb } from "../src/db/connection.ts";
+import { sql } from "../src/db/connection.ts";
 
 /**
  * Integration test for the FTS OR-fallback (F2) in hybrid search.
@@ -24,9 +24,8 @@ const RUN = process.env.YGGDRASIL_INTEGRATION_TESTS === "1";
 const NL_QUERY = "søknad journalføring eksisterende sak opprett behandling";
 
 describe.skipIf(!RUN)("hybrid search FTS OR-fallback against real melosys-api index", () => {
-  afterAll(async () => {
-    await closeDb();
-  });
+  // No closeDb() here: bun runs every test file in one process on one shared pool,
+  // so ending it in this file's afterAll failed the integration files that ran after it.
 
   test("multi-word natural-language query returns relevant results", async () => {
     const results = await hybridSearch(NL_QUERY, { repo: "melosys-api", limit: 10 });

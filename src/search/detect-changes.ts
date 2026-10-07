@@ -28,13 +28,17 @@ export interface ChangeDetectionResult {
   }[];
 }
 
+/** argv for the `git diff` that getChangedLines runs; exported so a test can pin the flags. */
+export function gitDiffArgs(ref?: string): string[] {
+  // quotePath=false: by default git C-quotes non-ASCII paths ("b/\303\205rsavregning.kt"),
+  // which then never match ci_files.path. parseGitDiff also unquotes, as a second guard.
+  const git = ["git", "-c", "core.quotePath=false", "diff"];
+  return ref ? [...git, ref, "--unified=0", "--no-color"] : [...git, "--unified=0", "--no-color"];
+}
+
 /** Run `git diff --unified=0` and parse it into changed files + touched line ranges. */
 async function getChangedLines(repoPath: string, ref?: string): Promise<DiffSummary> {
-  const args = ref
-    ? ["git", "diff", ref, "--unified=0", "--no-color"]
-    : ["git", "diff", "--unified=0", "--no-color"];
-
-  const proc = Bun.spawn(args, { cwd: repoPath, stdout: "pipe", stderr: "ignore" });
+  const proc = Bun.spawn(gitDiffArgs(ref), { cwd: repoPath, stdout: "pipe", stderr: "ignore" });
   const output = await new Response(proc.stdout).text();
 
   return parseGitDiff(output);
