@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { countParams, intellijMethodName, intellijParamCount } from "../scripts/eval-callers-parse.ts";
+import { countParams, declaredParamCount, intellijMethodName, intellijParamCount } from "../scripts/eval-callers-parse.ts";
 
 const strip = (s: string) => s.replace(/`/g, "");
 
@@ -37,5 +37,19 @@ describe("intellijParamCount", () => {
   test("reads the final group, not a `(` inside a test name", () => {
     expect(intellijParamCount("KlasseTest.lagre med HØY (typen vinner)()")).toBe(0);
     expect(intellijParamCount("Foo.bar(Baz, Map<A, B>)")).toBe(2);
+  });
+});
+
+describe("declaredParamCount", () => {
+  test("all parameters when there is no vararg", () => {
+    expect(declaredParamCount(2, 3)).toBe(3);
+  });
+
+  test("required parameters plus the vararg", () => {
+    expect(declaredParamCount(1, null)).toBe(2);
+  });
+
+  test("unknown without min_params", () => {
+    expect(declaredParamCount(null, null)).toBeNull();
   });
 });

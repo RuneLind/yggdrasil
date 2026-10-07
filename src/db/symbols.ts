@@ -13,6 +13,9 @@ export interface CiSymbol {
   doc_comment: string | null;
   visibility: string | null;
   is_static: boolean;
+  declared_type?: string | null;
+  min_params?: number | null;
+  max_params?: number | null;
 }
 
 export interface SymbolInsert {
@@ -27,6 +30,9 @@ export interface SymbolInsert {
   doc_comment?: string | null;
   visibility?: string | null;
   is_static?: boolean;
+  declared_type?: string | null;
+  min_params?: number | null;
+  max_params?: number | null;
 }
 
 export async function insertSymbol(sym: SymbolInsert): Promise<string> {
@@ -62,6 +68,9 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
         doc_comment: s.doc_comment ?? null,
         visibility: s.visibility ?? null,
         is_static: s.is_static ?? false,
+        declared_type: s.declared_type ?? null,
+        min_params: s.min_params ?? null,
+        max_params: s.max_params ?? null,
       })),
       "file_id",
       "name",
@@ -74,6 +83,9 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
       "doc_comment",
       "visibility",
       "is_static",
+      "declared_type",
+      "min_params",
+      "max_params",
     )}
     RETURNING id
   `;

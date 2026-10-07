@@ -16,7 +16,7 @@ import { sql, closeDb } from "../src/db/connection.ts";
 import { getRepo } from "../src/db/repos.ts";
 import { findSymbolByQualifiedName } from "../src/db/symbols.ts";
 import { analyzeImpactBySymbolId } from "../src/search/impact.ts";
-import { intellijMethodName, intellijParamCount, symbolParamCount } from "./eval-callers-parse.ts";
+import { intellijMethodName, intellijParamCount, declaredParamCount } from "./eval-callers-parse.ts";
 
 interface FixtureCaller {
   signature: string;
@@ -121,7 +121,7 @@ async function main() {
       notes.push(`${label}: file ${fs.file} matches no candidate, not narrowed by file`);
     }
     if (candidates.length > 1 && wantParams !== null) {
-      const byCount = candidates.filter((c) => symbolParamCount(c.signature, c.name) === wantParams);
+      const byCount = candidates.filter((c) => declaredParamCount(c.min_params, c.max_params) === wantParams);
       if (byCount.length > 0) candidates = byCount;
     }
     if (candidates.length === 0) notes.push(`${label}: not found in the index`);

@@ -13,6 +13,7 @@ describe("eval-callers exit code", () => {
 
   test("malformed JSON → 1", async () => {
     const r = await runEval(await tempFixture("{ not json"));
+    expect(r.stderr).toContain("eval-callers failed:");
     expect(r.code).toBe(1);
   });
 });

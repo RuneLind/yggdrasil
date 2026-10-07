@@ -77,9 +77,11 @@ export function intellijParamCount(signature: string): number | null {
   return open >= 0 ? countParams(signature, open) : null;
 }
 
-/** Parameter count of a ci_symbols signature, read from the group after the method name. */
-export function symbolParamCount(signature: string | null, name: string): number | null {
-  if (!signature) return null;
-  const at = signature.indexOf(`${name}(`);
-  return countParams(signature, at >= 0 ? at + name.length : 0);
+/**
+ * Declared parameter count from ci_symbols.min_params/max_params (from the AST): all
+ * parameters, or the required ones plus the vararg when max_params is null.
+ */
+export function declaredParamCount(minParams: number | null | undefined, maxParams: number | null | undefined): number | null {
+  if (minParams === null || minParams === undefined) return null;
+  return maxParams ?? minParams + 1;
 }

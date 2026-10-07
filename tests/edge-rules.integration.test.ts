@@ -30,26 +30,28 @@ describe.skipIf(!RUN)("edge rebuild rules", () => {
   });
 
   // Deleting a file changes no other file's hash; the rebuild must still run so the
-  // call into the deleted class retargets to the remaining match.
-  test("deleting a file retargets an ambiguous static call to the remaining class", async () => {
+  // call into the deleted copy of a class (two Gradle modules) retargets to the other.
+  test("deleting a file retargets a static call to the remaining copy of the class", async () => {
     repo = await createFixtureRepo({
-      "src/main/java/p/B.java": "package p;\n\npublic class B { public static void helper() {} }\n",
-      "src/main/java/q/B.java": "package q;\n\npublic class B { public static void helper() {} }\n",
-      "src/main/java/r/A.java": "package r;\n\npublic class A { void run() { B.helper(); } }\n",
+      "mod1/src/main/java/p/B.java": "package p;\n\npublic class B { public static void helper() {} }\n",
+      "mod2/src/main/java/p/B.java": "package p;\n\npublic class B { public static void helper() {} }\n",
+      "src/main/java/r/A.java": "package r;\n\nimport p.B;\n\npublic class A { void run() { B.helper(); } }\n",
     });
-    expect((await repo.edgesFrom("r.A.run", "calls")).map((e) => e.target)).toEqual(["p.B.helper"]);
-    await repo.reindex({}, ["src/main/java/p/B.java"]);
-    expect((await repo.edgesFrom("r.A.run", "calls")).map((e) => e.target)).toEqual(["q.B.helper"]);
+    const targets = async () => (await repo!.edgesFrom("r.A.run", "calls")).map((e) => [e.target, e.targetPath]);
+    expect(await targets()).toEqual([["p.B.helper", "mod1/src/main/java/p/B.java"]]);
+    await repo.reindex({}, ["mod1/src/main/java/p/B.java"]);
+    expect(await targets()).toEqual([["p.B.helper", "mod2/src/main/java/p/B.java"]]);
   });
 
-  // One call site, one edge: the first candidate by (qualified name, line) that is not
-  // the caller itself. `f(int)` precedes `f()`, so without the self-exclusion it would
-  // pick itself; `S.g()` matches p.S and q.S, and the tie-break picks p.S.
-  test("an overload calling its sibling and an ambiguous static call each resolve to one target", async () => {
+  // `f(int)` precedes `f()`; the arity picks `f()`, and the caller is never its own
+  // target. `S.g()` matches p.S and q.S by name; the import picks p.S.
+  test("an overload calling its sibling and an imported static call each resolve to one target", async () => {
     repo = await createFixtureRepo({
       "src/main/java/p/S.java": "package p;\n\npublic class S { public static void g() {} }\n",
       "src/main/java/q/S.java": "package q;\n\npublic class S { public static void g() {} }\n",
       "src/main/java/r/A.java": `package r;
+
+import p.S;
 
 public class A {
     void f(int a) {
@@ -63,8 +65,8 @@ public class A {
     });
     const edges = await repo.edgesFrom("r.A.f", "calls");
     expect(edges.map((e) => [e.sourceLine, e.target, e.targetLine])).toEqual([
-      [4, "p.S.g", 3],
-      [4, "r.A.f", 9],
+      [6, "p.S.g", 3],
+      [6, "r.A.f", 11],
     ]);
   });
 

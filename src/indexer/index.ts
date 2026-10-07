@@ -7,7 +7,7 @@ import { storeCallGraph, rebuildEdges } from "./edge-resolver.ts";
 import { embedSymbols } from "./embedder.ts";
 import { warmupEmbeddings } from "../embeddings.ts";
 import { upsertRepo, updateRepoCommit, updateRepoExtractorVersion } from "../db/repos.ts";
-import { ensureFile, markFileIndexed, deleteFileData, deleteStaleFiles } from "../db/files.ts";
+import { ensureFile, markFileIndexed, deleteFileData, deleteStaleFiles, setFilePackage } from "../db/files.ts";
 import { insertSymbolsBatch, updateSymbolParents, getRepoSymbolCount } from "../db/symbols.ts";
 import { sql } from "../db/connection.ts";
 import type { RepoConfig } from "../config.ts";
@@ -17,7 +17,7 @@ import type { RepoConfig } from "../config.ts";
  * differing ci_repos.extractor_version re-extracts every file (content hashes alone don't).
  * The check is equality only: an older binary on a DB stamped with its version skips call sites.
  */
-export const EXTRACTOR_VERSION = 2;
+export const EXTRACTOR_VERSION = 3;
 
 /**
  * Whether a repo's stored extractor version forces a full re-extract. NULL (never gated)
@@ -147,6 +147,7 @@ export async function indexRepo(
     try {
       const extraction = extractSymbols(source, tree, file.language, language);
       const qualifiedNames = buildQualifiedNames(extraction);
+      await setFilePackage(fileId, extraction.packageName);
 
       // Insert symbols
       const inserts = toSymbolInserts(

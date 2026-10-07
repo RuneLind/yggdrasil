@@ -2,6 +2,7 @@ import { Query, type Language } from "web-tree-sitter";
 import type { SupportedLanguage } from "./parser.ts";
 import type { SymbolInsert } from "../db/symbols.ts";
 import { nodeText, findNamedChild } from "./ast-utils.ts";
+import type { Node as SyntaxNode } from "web-tree-sitter";
 
 export type SymbolKind = "class" | "interface" | "enum" | "method" | "function" |
   "constructor" | "object" | "field" | "property" | "type" | "unknown";
@@ -25,6 +26,7 @@ const QUERIES: Record<SupportedLanguage, string> = {
     (class_declaration name: (identifier) @name) @class
     (interface_declaration name: (identifier) @name) @interface
     (enum_declaration name: (identifier) @name) @enum
+    (record_declaration name: (identifier) @name) @class
     (method_declaration name: (identifier) @name) @method
     (constructor_declaration name: (identifier) @name) @constructor
     (field_declaration) @field
@@ -64,6 +66,11 @@ export interface ExtractedSymbol {
   isStatic: boolean;
   /** For building qualified names — parent symbol index in the same extraction batch */
   parentIndex: number | null;
+  /** A property's type or a method's return type, normalized (see normalizeTypeName). */
+  declaredType: string | null;
+  /** Callables only: parameters without a default; all parameters, null for a vararg. */
+  minParams: number | null;
+  maxParams: number | null;
 }
 
 export interface ExtractedImport {
@@ -119,6 +126,10 @@ export function extractSymbols(
     // Import declarations
     if (captures.has("import")) {
       const impNode = captures.get("import")!;
+      if (lang === "kotlin") {
+        imports.push(kotlinImport(impNode, source));
+        continue;
+      }
       const importText = nodeText(impNode, source);
       const isWildcard = importText.includes(".*") || importText.includes("* as");
       const importPath = importText
@@ -137,6 +148,7 @@ export function extractSymbols(
       const docComment = extractDocComment(source, patternNode);
       const visibility = extractVisibility(patternNode, lang);
       const name = nodeText(nameNode, source);
+      const shape = declarationShape(patternNode, lang, source);
 
       symbols.push({
         name,
@@ -150,11 +162,13 @@ export function extractSymbols(
         visibility,
         isStatic: checkStatic(patternNode),
         parentIndex: null, // resolved in a second pass
+        ...shape,
       });
     }
   }
 
-  // Resolve parent indices by checking line containment
+  // Parent = tightest enclosing container by source range; lines tie when two
+  // declarations share one, which nested every one-line class inside its own child.
   for (let i = 0; i < symbols.length; i++) {
     const sym = symbols[i];
     for (let j = 0; j < symbols.length; j++) {
@@ -162,22 +176,109 @@ export function extractSymbols(
       const candidate = symbols[j];
       if (
         CONTAINER_KINDS.has(candidate.kind) &&
-        sym.startLine >= candidate.startLine &&
-        sym.endLine <= candidate.endLine
+        sym.startIndex >= candidate.startIndex &&
+        sym.endIndex <= candidate.endIndex &&
+        (sym.parentIndex === null || candidate.startIndex >= symbols[sym.parentIndex].startIndex)
       ) {
-        // Pick the tightest enclosing parent
-        if (
-          sym.parentIndex === null ||
-          (candidate.startLine >= symbols[sym.parentIndex].startLine &&
-            candidate.endLine <= symbols[sym.parentIndex].endLine)
-        ) {
-          sym.parentIndex = j;
-        }
+        sym.parentIndex = j;
       }
     }
   }
 
   return { packageName, symbols, imports };
+}
+
+/** `import a.b.C`, `import a.b.*`, `import a.b.C as D`, read from the AST. */
+function kotlinImport(node: SyntaxNode, source: string): ExtractedImport {
+  const children = node.children;
+  const path = findNamedChild(node, "qualified_identifier") ?? findNamedChild(node, "identifier");
+  const asAt = children.findIndex((c: SyntaxNode) => c.type === "as");
+  const aliasNode = asAt >= 0 ? children.slice(asAt + 1).find((c: SyntaxNode) => c.type === "identifier") : undefined;
+  return {
+    importPath: path ? nodeText(path, source) : "",
+    alias: aliasNode ? nodeText(aliasNode, source) : null,
+    isWildcard: children.some((c: SyntaxNode) => c.type === "*"),
+  };
+}
+
+const TYPE_PATH = /^[\p{L}_$][\p{L}\p{M}\p{N}\p{Pc}\p{Sc}]*(\.[\p{L}_$][\p{L}\p{M}\p{N}\p{Pc}\p{Sc}]*)*$/u;
+
+/**
+ * A type as written → the identifier path a class lookup can match: generic arguments,
+ * nullable `?` and whitespace removed. Null for anything else (function types, arrays).
+ */
+export function normalizeTypeName(text: string | null | undefined): string | null {
+  if (!text) return null;
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "<") depth++;
+    else if (ch === ">" && text[i - 1] !== "-") depth--;
+    else if (depth === 0) out += ch;
+  }
+  out = out.replace(/[?\s]/g, "");
+  return TYPE_PATH.test(out) ? out : null;
+}
+
+const KOTLIN_TYPE_NODES: ReadonlySet<string> = new Set(["user_type", "nullable_type", "function_type", "parenthesized_type", "non_nullable_type"]);
+
+/** Kotlin `val x: T` → T; `val x = Foo(…)` → Foo (an uppercase callee is a constructor call). */
+export function kotlinVariableType(decl: SyntaxNode, value: SyntaxNode | null | undefined, source: string): string | null {
+  const typeNode = decl.namedChildren.find((c: SyntaxNode) => KOTLIN_TYPE_NODES.has(c.type));
+  if (typeNode) return normalizeTypeName(nodeText(typeNode, source));
+  if (value?.type === "call_expression") {
+    const callee = value.namedChild(0);
+    if (callee?.type === "identifier" && /^\p{Lu}/u.test(nodeText(callee, source))) return nodeText(callee, source);
+  }
+  return null;
+}
+
+type DeclarationShape = Pick<ExtractedSymbol, "declaredType" | "minParams" | "maxParams">;
+
+function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: string): DeclarationShape {
+  const none: DeclarationShape = { declaredType: null, minParams: null, maxParams: null };
+  if (lang === "java" && (node.type === "method_declaration" || node.type === "constructor_declaration")) {
+    const params = node.childForFieldName("parameters");
+    let count = 0;
+    let vararg = false;
+    for (const p of params?.namedChildren ?? []) {
+      if (p.type === "formal_parameter") count++;
+      else if (p.type === "spread_parameter") vararg = true;
+    }
+    const type = node.childForFieldName("type");
+    return { declaredType: type ? normalizeTypeName(nodeText(type, source)) : null, minParams: count, maxParams: vararg ? null : count };
+  }
+  if (lang === "kotlin" && node.type === "function_declaration") {
+    const children = node.children;
+    const paramsAt = children.findIndex((c: SyntaxNode) => c.type === "function_value_parameters");
+    if (paramsAt < 0) return none;
+    let min = 0;
+    let max: number | null = 0;
+    let varargNext = false;
+    const params = children[paramsAt].children;
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      if (p.type === "parameter_modifiers") varargNext = nodeText(p, source).includes("vararg");
+      if (p.type !== "parameter") continue;
+      const vararg = varargNext || nodeText(p, source).startsWith("vararg");
+      varargNext = false;
+      if (vararg) max = null;
+      else {
+        if (max !== null) max++;
+        if (params[i + 1]?.type !== "=") min++;
+      }
+    }
+    const colon = children[paramsAt + 1]?.type === ":" ? children[paramsAt + 2] : undefined;
+    return { declaredType: colon ? normalizeTypeName(nodeText(colon, source)) : null, minParams: min, maxParams: max };
+  }
+  if (lang === "kotlin" && node.type === "property_declaration") {
+    const decl = findNamedChild(node, "variable_declaration");
+    const eq = node.children.findIndex((c: SyntaxNode) => c.type === "=");
+    const value = eq >= 0 ? node.children.slice(eq + 1).find((c: SyntaxNode) => c.isNamed) : null;
+    return { ...none, declaredType: decl ? kotlinVariableType(decl, value, source) : null };
+  }
+  return none;
 }
 
 const CAPTURE_TO_KIND: Record<string, SymbolKind> = {
@@ -314,5 +415,8 @@ export function toSymbolInserts(
     doc_comment: sym.docComment,
     visibility: sym.visibility,
     is_static: sym.isStatic,
+    declared_type: sym.declaredType,
+    min_params: sym.minParams,
+    max_params: sym.maxParams,
   }));
 }

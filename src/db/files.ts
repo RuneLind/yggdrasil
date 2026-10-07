@@ -57,6 +57,11 @@ export async function markFileIndexed(
   `;
 }
 
+/** Phase 2 resolves same-package type names and functions against this. */
+export async function setFilePackage(fileId: string, packageName: string | null): Promise<void> {
+  await sql`UPDATE ci_files SET package_name = ${packageName} WHERE id = ${fileId}`;
+}
+
 export async function deleteFileData(fileId: string): Promise<void> {
   // ci_symbols cascade-deletes ci_edges via FK; import_map needs explicit delete
   await Promise.all([

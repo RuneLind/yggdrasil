@@ -180,10 +180,10 @@ public class Dup {
 });
 
 /**
- * Overloads share a qualified name. Among same-file targets with one qualified name,
- * the lower start line wins, then the lower id.
+ * Overloads share a qualified name. A call's argument count cannot tell same-arity
+ * overloads apart without argument types, so each of them gets an edge.
  */
-describe.skipIf(!RUN)("tie-break between overloads", () => {
+describe.skipIf(!RUN)("same-arity overloads", () => {
   let repo: FixtureRepo;
 
   beforeAll(async () => {
@@ -207,25 +207,19 @@ public class Ov {
     await repo?.cleanup();
   });
 
-  test("the overload with the lower start line wins", async () => {
+  test("every overload of the call's arity gets an edge", async () => {
     const edges = await repo.edgesFrom("p.Ov.caller", "calls");
-    expect(edges.filter((e) => e.target === "p.Ov.over").map((e) => e.targetLine)).toEqual([4]);
+    expect(edges.filter((e) => e.target === "p.Ov.over").map((e) => e.targetLine).sort()).toEqual([4, 6]);
   });
 
-  test("overloads on one line: the lower id wins", async () => {
-    const ids = await sql<{ id: string }[]>`
-      SELECT s.id FROM ci_symbols s JOIN ci_files f ON f.id = s.file_id
-      JOIN ci_repos r ON r.id = f.repo_id
-      WHERE r.name = ${repo.name} AND s.qualified_name = 'p.Ov.same'
-      ORDER BY s.id`;
-    expect(ids).toHaveLength(2);
-    const [edge] = await sql<{ target_id: string }[]>`
-      SELECT e.target_id FROM ci_edges e JOIN ci_symbols src ON src.id = e.source_id
+  test("overloads on one line each get an edge", async () => {
+    const [{ n }] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM ci_edges e JOIN ci_symbols src ON src.id = e.source_id
       JOIN ci_files f ON f.id = src.file_id JOIN ci_repos r ON r.id = f.repo_id
       JOIN ci_symbols t ON t.id = e.target_id
       WHERE r.name = ${repo.name} AND src.qualified_name = 'p.Ov.caller'
         AND t.qualified_name = 'p.Ov.same' AND e.kind = 'calls'`;
-    expect(edge.target_id).toBe(ids[0].id);
+    expect(n).toBe(2);
   });
 });
 

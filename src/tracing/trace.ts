@@ -140,6 +140,8 @@ export interface TraceImpactV1 {
     qualifiedName: string;
     kind: string;
     depth: number;
+    /** ci_edges.resolution of the edge that reached it: local | static | typed, null otherwise. */
+    resolution: string | null;
     confidence: number;
   }>;
   timingsMs: Partial<Record<TraceImpactTiming, number>> & { total: number };

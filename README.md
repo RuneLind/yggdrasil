@@ -101,6 +101,7 @@ erDiagram
         text path
         text language
         text content_hash
+        text package_name
     }
 
     ci_symbols {
@@ -113,6 +114,9 @@ erDiagram
         int start_line
         int end_line
         text signature
+        text declared_type
+        int min_params
+        int max_params
         vector embedding
         tsvector search_vector
     }
@@ -123,6 +127,7 @@ erDiagram
         uuid target_id FK
         text kind
         int line
+        text resolution
     }
 
     ci_call_sites {
@@ -131,6 +136,7 @@ erDiagram
         uuid source_symbol_id FK
         text receiver
         text receiver_kind
+        text receiver_type
         text method_name
         int arg_count
         int line
@@ -145,7 +151,11 @@ erDiagram
     }
 ```
 
-Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones. A call site belongs to the outermost method, function or constructor whose source range contains it and that lies inside the innermost class, interface, enum or object containing the call. Calls inside an anonymous class, object expression or local function count for the host; calls inside a local named class count for that class's methods.
+Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones.
+
+A call site belongs to the outermost method, function or constructor whose source range contains it and that lies inside the innermost class, interface, enum or object containing the call. When no callable inside that container contains the call, as in a local class's field initializer or init block, the owner is the outermost callable inside the next container out. Calls inside an anonymous class, object expression, lambda or local function count for the host. Calls in a top-level class's field initializers, static or instance initializers and Kotlin `init` blocks, and in top-level property initializers, have no owner and are not stored.
+
+At extraction, a receiver that is a single identifier gets the declared type of the variable it names (`ci_call_sites.receiver_type`), looked up in the AST from the call outward: locals declared before the call, enclosing parameters, then fields, properties and constructor properties of the enclosing classes. `this.`, `!!`, a nullable `?` and generic arguments are stripped first. The rebuild then resolves each type name (supertype, class-name receiver or receiver type) to one class: a member type of an enclosing class, an explicit import (alias included), the same package, a wildcard import, then the name as a qualified name. An explicit import of a class outside the repo resolves to nothing. The method is looked up on that class, then up its `extends`/`implements` chain; the nearest class with a same-name method whose parameter range (`min_params`..`max_params`, open for a vararg) admits the argument count wins, and each such overload in it gets an edge. A receiverless call without a member match resolves to an imported, same-package or wildcard-imported top-level function or static import. Each `calls` edge records how it resolved in `ci_edges.resolution`: `local` (no receiver or `this`), `static` (a class name) or `typed` (a variable with a declared type). Other receivers, such as call chains, produce no edge.
 
 When `ci_repos.extractor_version` differs from `EXTRACTOR_VERSION` in `src/indexer/index.ts`, a plain `bun run index` re-extracts every file, as with `--full`. Bump the constant whenever extraction output changes. The re-extract drops every embedding of the repo, so with `--no-embed` semantic search stays dead until you run `bun run embed`.
 
@@ -157,7 +167,7 @@ The server exposes 10 tools over streamable HTTP on port 9130:
 |------|-------------|-------------|
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg attaches a trace pointer URL — see [Tracing](#tracing). | "Find code related to payment processing" |
 | `symbol_context` | 360-degree view of a symbol: callers, callees, inheritance | "What calls this method? What does it extend?" |
-| `impact` | Blast radius — what breaks if this symbol changes? Each result is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/…) so an agent can filter the noise with `archetype_exclude`. Optional `trace` arg. | "If I change Behandling, what's affected? (excluding tests and controllers)" |
+| `impact` | Blast radius — what breaks if this symbol changes? Each result is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/…) so an agent can filter the noise with `archetype_exclude`, and carries the `resolution` (`local`/`static`/`typed`, `null` for extends/implements) of the edge that reached it. Optional `trace` arg. | "If I change Behandling, what's affected? (excluding tests and controllers)" |
 | `detect_changes` | Map a git diff to affected symbols + their blast radius (inherits archetype tagging). Optional `trace` arg. | "What's the impact of this PR?" |
 | `analyze_ticket` | One round-trip orchestration over `search` → `symbol_context` → `impact` per top candidate. Returns ticket → top symbols + caller/callee/inheritance + blast radius (archetype-tagged) + affected tests. | "Analyze this Jira ticket and tell me what to touch" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
@@ -387,7 +397,7 @@ src/
 │   ├── symbol-extractor.ts   AST → symbols per language
 │   ├── ast-utils.ts          Shared AST helpers
 │   ├── import-resolver.ts    Resolve imports → edges
-│   ├── call-graph.ts         Extract calls (receiver kind, arg count) + inheritance
+│   ├── call-graph.ts         Extract calls (receiver kind, receiver type, arg count) + inheritance
 │   └── edge-resolver.ts      Store call sites; rebuild call/inheritance edges repo-wide
 ├── search/
 │   ├── hybrid-search.ts      RRF over FTS + semantic + name
