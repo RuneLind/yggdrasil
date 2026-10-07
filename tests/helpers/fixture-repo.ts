@@ -32,6 +32,8 @@ export interface FixtureRepo {
   name: string;
   path: string;
   index: IndexResult;
+  /** Overwrite or add `files`, then run an incremental `indexRepo` on the same repo. */
+  reindex(files?: Record<string, string>): Promise<IndexResult>;
   /** All edges whose source and target both live in this repo, by qualified name. */
   edges(kind?: string): Promise<FixtureEdge[]>;
   /** Incoming edges to `targetQualifiedName`, optionally filtered by kind. */
@@ -58,15 +60,20 @@ export async function createFixtureRepo(
     }
   };
 
-  try {
-    for (const [rel, content] of Object.entries(files)) {
+  const writeFiles = async (toWrite: Record<string, string>) => {
+    for (const [rel, content] of Object.entries(toWrite)) {
       const abs = join(path, rel);
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, content);
     }
-    // exclude: [] — the default excludes nothing a fixture uses, but an explicit empty
-    // list keeps `src/test/...` fixture paths from ever being filtered.
-    const index = await indexRepo({ name, path, languages, exclude: [] }, { skipEmbeddings: true });
+  };
+  // exclude: [] — the default excludes nothing a fixture uses, but an explicit empty
+  // list keeps `src/test/...` fixture paths from ever being filtered.
+  const runIndex = () => indexRepo({ name, path, languages, exclude: [] }, { skipEmbeddings: true });
+
+  try {
+    await writeFiles(files);
+    const index = await runIndex();
 
     const edges = async (filter: { kind?: string; source?: string; target?: string } = {}) => {
       const kindFilter = filter.kind ? sql`AND e.kind = ${filter.kind}` : sql``;
@@ -90,6 +97,10 @@ export async function createFixtureRepo(
       name,
       path,
       index,
+      reindex: async (changed = {}) => {
+        await writeFiles(changed);
+        return runIndex();
+      },
       edges: (kind) => edges({ kind }),
       edgesTo: (target, kind) => edges({ target, kind }),
       edgesFrom: (source, kind) => edges({ source, kind }),

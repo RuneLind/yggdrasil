@@ -5,6 +5,7 @@ export interface CiRepo {
   name: string;
   path: string;
   last_commit: string | null;
+  extractor_version: number | null;
   indexed_at: Date | null;
   created_at: Date;
 }
@@ -71,4 +72,8 @@ export async function updateRepoCommit(
     SET last_commit = ${commit}, indexed_at = now()
     WHERE id = ${repoId}
   `;
+}
+
+export async function updateRepoExtractorVersion(repoId: string, version: number): Promise<void> {
+  await sql`UPDATE ci_repos SET extractor_version = ${version} WHERE id = ${repoId}`;
 }
