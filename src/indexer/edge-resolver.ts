@@ -7,17 +7,24 @@ import type { ExtractedSymbol } from "./symbol-extractor.ts";
 const CALLABLE_KINDS: ReadonlySet<string> = new Set(["method", "function", "constructor"]);
 
 /**
- * Index of the outermost method, function or constructor whose source range contains
- * `position`, or null. Outermost, so a call inside an anonymous class, object expression
- * or local function belongs to the host callable that has callers; a source range, not
- * a line span, so two callables on one line each keep their own calls.
+ * Index of the outermost method, function or constructor that contains `position` and
+ * lies inside the innermost class, interface, enum or object containing it, or null.
+ * Anonymous classes and object expressions are not container symbols, so their calls
+ * belong to the host callable: their own methods have no callers. Crediting a local
+ * function's calls to its host is a choice: one owner, a shorter impact path. A local
+ * named class is a container, so its methods keep their calls and resolve `this` against
+ * it. A source range, not a line span, so two callables on one line each keep their calls.
  */
 export function outermostCallableIndex(symbols: ExtractedSymbol[], position: number): number | null {
+  const contains = (sym: ExtractedSymbol) => position >= sym.startIndex && position < sym.endIndex;
+  let containerStart = -1;
+  for (const sym of symbols) {
+    if (CONTAINER_KINDS.has(sym.kind) && contains(sym)) containerStart = Math.max(containerStart, sym.startIndex);
+  }
   let best: number | null = null;
   for (let i = 0; i < symbols.length; i++) {
     const sym = symbols[i];
-    if (!CALLABLE_KINDS.has(sym.kind)) continue;
-    if (position < sym.startIndex || position >= sym.endIndex) continue;
+    if (!CALLABLE_KINDS.has(sym.kind) || !contains(sym) || sym.startIndex <= containerStart) continue;
     if (best === null || sym.startIndex < symbols[best].startIndex) best = i;
   }
   return best;
@@ -79,13 +86,13 @@ export interface RebuildResult {
  * - Call with a `static-type` receiver: a method whose parent's qualified name is the
  *   receiver or ends with `.<receiver>`.
  * - Call with no receiver or `this`: a method whose parent has the same qualified name
- *   as the caller's parent, preferring the caller's own file (the same class can exist
- *   in two Gradle modules).
+ *   as the caller's parent.
  * - Other receivers need type inference and produce no edge.
  *
  * The source itself is never a target. When several targets match, the first by
- * (same file for an unqualified call, qualified name, line, id) wins: the earlier
- * in-memory resolver also kept one match, but in DB row order, so ties fell arbitrarily.
+ * (caller's own file, qualified name, line, id) wins; the own file first because the
+ * same class can exist in two Gradle modules. The earlier in-memory resolver also kept
+ * one match, but in DB row order, so ties fell arbitrarily.
  */
 export async function rebuildEdges(repoId: string): Promise<RebuildResult> {
   return sql.begin(async (tx) => {
@@ -155,7 +162,7 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
           OR (cs.receiver_kind IN ('none', 'this')
             AND tp.qualified_name = srcp.qualified_name)
         )
-      ORDER BY cs.id, (cs.receiver_kind <> 'static-type' AND t.file_id = cs.file_id) DESC,
+      ORDER BY cs.id, (t.file_id = cs.file_id) DESC,
         t.qualified_name, t.start_line, t.id
     ) picked
     ON CONFLICT (source_id, target_id, kind, line) DO NOTHING

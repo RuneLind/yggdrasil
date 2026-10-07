@@ -87,11 +87,11 @@ export async function indexRepo(
         console.log(
           `[yggdrasil] Extractor version ${repo.extractor_version ?? "none"} → ${EXTRACTOR_VERSION}: re-extracting all files`,
         );
-        if (options.skipEmbeddings) {
-          console.warn(
-            `[yggdrasil] WARNING: re-extracting drops every embedding of ${config.name}, and --no-embed skips regenerating them: semantic search stays dead until you run \`bun run embed\`.`,
-          );
-        }
+      }
+      if (options.skipEmbeddings) {
+        console.warn(
+          `[yggdrasil] WARNING: re-extracting drops every embedding of ${config.name}, and --no-embed skips regenerating them: semantic search stays dead until you run \`bun run embed\`.`,
+        );
       }
       const deleteStart = performance.now();
       const deleted = await sql`DELETE FROM ci_files WHERE repo_id = ${repo.id}`;
