@@ -13,9 +13,12 @@ export interface ExtractedCall {
   /** Includes a Kotlin trailing lambda; null when a spread or named argument makes the count unreliable. */
   argCount: number | null;
   line: number;
+  /** Call node's start offset, same units as ExtractedSymbol.startIndex. */
+  startIndex: number;
 }
 
-const IDENT_PATH_SEGMENT = /^[\p{L}_$][\p{L}\p{N}_$]*$/u;
+// Continuation allows combining marks, so an NFD-encoded Å (A + U+030A) stays one identifier.
+const IDENT_PATH_SEGMENT = /^[\p{L}_$][\p{L}\p{M}\p{N}\p{Pc}\p{Sc}]*$/u;
 
 /**
  * Classify a receiver as extracted. `static-type` is an identifier path starting with an
@@ -118,6 +121,7 @@ function extractJavaCalls(root: SyntaxNode, source: string, calls: ExtractedCall
       methodName: nodeText(nameNode, source),
       argCount: args ? args.namedChildren.filter((c: SyntaxNode) => !isComment(c)).length : 0,
       line: node.startPosition.row + 1,
+      startIndex: node.startIndex,
     });
   });
 }
@@ -202,6 +206,7 @@ function extractKotlinCalls(root: SyntaxNode, source: string, calls: ExtractedCa
           methodName: nodeText(parts[parts.length - 1], source),
           argCount: kotlinArgCount(node),
           line: node.startPosition.row + 1,
+          startIndex: node.startIndex,
         });
       }
     } else if (firstChild.type === "identifier") {
@@ -211,13 +216,14 @@ function extractKotlinCalls(root: SyntaxNode, source: string, calls: ExtractedCa
         methodName: nodeText(firstChild, source),
         argCount: kotlinArgCount(node),
         line: node.startPosition.row + 1,
+        startIndex: node.startIndex,
       });
     }
   });
 }
 
 function isComment(node: SyntaxNode): boolean {
-  return node.type === "line_comment" || node.type === "block_comment" || node.type === "comment";
+  return node.type === "line_comment" || node.type === "block_comment";
 }
 
 /**

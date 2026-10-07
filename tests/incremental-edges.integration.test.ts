@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { createFixtureRepo, type FixtureRepo } from "./helpers/fixture-repo.ts";
 import { sql } from "../src/db/connection.ts";
 import { EXTRACTOR_VERSION } from "../src/indexer/index.ts";
@@ -81,74 +81,49 @@ public class C extends B {
  * differs from EXTRACTOR_VERSION must force re-extraction of unchanged files.
  */
 describe.skipIf(!RUN)("extractor version gate", () => {
-  let repo: FixtureRepo;
+  // Each test builds its own repo, so none depends on another's state or order.
+  let repo: FixtureRepo | undefined;
 
-  const signature = async () => {
+  const signature = async (r: FixtureRepo) => {
     const [row] = await sql<{ signature: string }[]>`
       SELECT s.signature FROM ci_symbols s
       JOIN ci_files f ON f.id = s.file_id JOIN ci_repos r ON r.id = f.repo_id
-      WHERE r.name = ${repo.name} AND s.qualified_name = 'p.B.helper'
+      WHERE r.name = ${r.name} AND s.qualified_name = 'p.B.helper'
     `;
     return row?.signature;
   };
+  const storedVersion = async (r: FixtureRepo) => {
+    const [row] = await sql<{ extractor_version: number }[]>`
+      SELECT extractor_version FROM ci_repos WHERE name = ${r.name}`;
+    return row.extractor_version;
+  };
+  const staleSignatures = (r: FixtureRepo) => sql`
+    UPDATE ci_symbols SET signature = 'STALE' WHERE file_id IN (
+      SELECT f.id FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id WHERE r.name = ${r.name})`;
 
-  beforeAll(async () => {
-    repo = await createFixtureRepo({ "src/main/java/p/B.java": B_V1 });
-  });
-
-  afterAll(async () => {
+  afterEach(async () => {
     await repo?.cleanup();
+    repo = undefined;
   });
 
   test("the first index stamps the current version", async () => {
-    const [row] = await sql<{ extractor_version: number }[]>`
-      SELECT extractor_version FROM ci_repos WHERE name = ${repo.name}`;
-    expect(row.extractor_version).toBe(EXTRACTOR_VERSION);
+    repo = await createFixtureRepo({ "src/main/java/p/B.java": B_V1 });
+    expect(await storedVersion(repo)).toBe(EXTRACTOR_VERSION);
   });
 
   test("matching version: an unchanged file keeps its stored rows", async () => {
-    await sql`UPDATE ci_symbols SET signature = 'STALE' WHERE file_id IN (
-      SELECT f.id FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id WHERE r.name = ${repo.name})`;
+    repo = await createFixtureRepo({ "src/main/java/p/B.java": B_V1 });
+    await staleSignatures(repo);
     expect((await repo.reindex()).changedFiles).toBe(0);
-    expect(await signature()).toBe("STALE");
+    expect(await signature(repo)).toBe("STALE");
   });
 
   test("stale version: an unchanged file is re-extracted and the version updated", async () => {
+    repo = await createFixtureRepo({ "src/main/java/p/B.java": B_V1 });
+    await staleSignatures(repo);
     await sql`UPDATE ci_repos SET extractor_version = ${EXTRACTOR_VERSION - 1} WHERE name = ${repo.name}`;
     expect((await repo.reindex()).changedFiles).toBe(1);
-    expect(await signature()).toBe("public static int helper()");
-    const [row] = await sql<{ extractor_version: number }[]>`
-      SELECT extractor_version FROM ci_repos WHERE name = ${repo.name}`;
-    expect(row.extractor_version).toBe(EXTRACTOR_VERSION);
-  });
-});
-
-/** A call site produces an edge from its innermost enclosing callable only. */
-describe.skipIf(!RUN)("innermost owner of a call site", () => {
-  let repo: FixtureRepo;
-
-  beforeAll(async () => {
-    repo = await createFixtureRepo({
-      "src/main/java/p/B.java": B_V1,
-      "src/main/kotlin/p/K.kt": `package p
-
-class K {
-    fun outer() {
-        fun inner() {
-            B.helper()
-        }
-        inner()
-    }
-}
-`,
-    });
-  });
-
-  afterAll(async () => {
-    await repo?.cleanup();
-  });
-
-  test("the call in a local function links from the local function, not its host", async () => {
-    expect((await repo.edgesTo("p.B.helper", "calls")).map((e) => e.source)).toEqual(["p.K.inner"]);
+    expect(await signature(repo)).toBe("public static int helper()");
+    expect(await storedVersion(repo)).toBe(EXTRACTOR_VERSION);
   });
 });

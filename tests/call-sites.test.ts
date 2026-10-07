@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { initParser, loadLanguage, parseSource, type SupportedLanguage } from "../src/indexer/parser.ts";
 import { extractSymbols } from "../src/indexer/symbol-extractor.ts";
 import { extractCallGraph, classifyReceiver } from "../src/indexer/call-graph.ts";
-import { innermostCallableIndex } from "../src/indexer/edge-resolver.ts";
+import { outermostCallableIndex } from "../src/indexer/edge-resolver.ts";
 
 async function calls(lang: SupportedLanguage, source: string) {
   await initParser();
@@ -23,6 +23,8 @@ describe("classifyReceiver", () => {
     ["repo", "identifier"],
     ["Foo", "static-type"],
     ["Årsavregning", "static-type"],
+    ["A\u030Arsavregning", "static-type"], // NFD: A + combining ring above
+    ["A\u030Arsavregning.Beløp", "static-type"],
     ["Outer.Inner", "static-type"],
     ["a.b", "chain-or-expression"],
     ["Foo()", "chain-or-expression"],
@@ -40,8 +42,9 @@ describe("argCount", () => {
       "kotlin",
       `fun f() { a.b(1, 2); g(1) { it }; h { }; k(x = 1); m(*arr); n() }`,
     );
-    const byName = Object.fromEntries(cs.map((c) => [c.methodName, c.argCount]));
-    expect(byName).toEqual({ b: 2, g: 2, h: 1, k: null, m: null, n: 0 });
+    expect(cs.map((c) => [c.methodName, c.argCount])).toEqual([
+      ["b", 2], ["g", 2], ["h", 1], ["k", null], ["m", null], ["n", 0],
+    ]);
   });
 
   test("Java: counts arguments, ignores comments", async () => {
@@ -53,11 +56,20 @@ describe("argCount", () => {
   });
 });
 
-describe("innermostCallableIndex", () => {
-  test("a call in a Kotlin local function belongs to the local function only", async () => {
-    const { extraction, calls: cs } = await calls(
-      "kotlin",
-      `class K {
+describe("outermostCallableIndex", () => {
+  const owners = async (lang: SupportedLanguage, source: string) => {
+    const { extraction, calls: cs } = await calls(lang, source);
+    return cs.map((c) => {
+      const idx = outermostCallableIndex(extraction.symbols, c.startIndex);
+      return [c.methodName, idx === null ? null : extraction.symbols[idx].name];
+    });
+  };
+
+  test("a call in a Kotlin local function belongs to the host function", async () => {
+    expect(
+      await owners(
+        "kotlin",
+        `class K {
     fun outer() {
         fun inner() {
             B.helper()
@@ -65,18 +77,26 @@ describe("innermostCallableIndex", () => {
         inner()
     }
 }`,
-    );
-    const owner = (method: string) => {
-      const call = cs.find((c) => c.methodName === method)!;
-      const idx = innermostCallableIndex(extraction.symbols, call.line);
-      return idx === null ? null : extraction.symbols[idx].name;
-    };
-    expect(owner("helper")).toBe("inner");
-    expect(owner("inner")).toBe("outer");
+      ),
+    ).toEqual([["helper", "outer"], ["inner", "outer"]]);
+  });
+
+  test("two Java methods on one line each own their own call", async () => {
+    expect(
+      await owners("java", `class A { void a() { H.c(5); } void b() { H.c(6); } }`),
+    ).toEqual([["c", "a"], ["c", "b"]]);
+  });
+
+  test("a call in a Java anonymous class belongs to the host method", async () => {
+    expect(
+      await owners(
+        "java",
+        `class A {\n  void outer() {\n    schedule(new Runnable() { public void run() { tick(); } });\n  }\n}`,
+      ),
+    ).toEqual([["schedule", "outer"], ["tick", "outer"]]);
   });
 
   test("a call outside any callable has no owner", async () => {
-    const { extraction, calls: cs } = await calls("kotlin", `class K {\n    val x = B.helper()\n}`);
-    expect(innermostCallableIndex(extraction.symbols, cs[0].line)).toBeNull();
+    expect(await owners("kotlin", `class K {\n    val x = B.helper()\n}`)).toEqual([["helper", null]]);
   });
 });

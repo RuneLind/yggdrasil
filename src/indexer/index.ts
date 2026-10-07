@@ -13,12 +13,28 @@ import { sql } from "../db/connection.ts";
 import type { RepoConfig } from "../config.ts";
 
 /**
- * Version of what extraction stores per file (symbols, imports, call sites,
- * inheritance refs). Bump it whenever extraction output changes: `indexRepo` re-extracts
- * every file when ci_repos.extractor_version differs, since a content-hash check alone
- * keeps pre-change rows for unchanged files.
+ * Version of what extraction stores per file; bump it when that output changes, and a
+ * differing ci_repos.extractor_version re-extracts every file (content hashes alone don't).
+ * The check is equality only: an older binary on a DB stamped with its version skips call sites.
  */
-export const EXTRACTOR_VERSION = 1;
+export const EXTRACTOR_VERSION = 2;
+
+/**
+ * Whether a repo's stored extractor version forces a full re-extract. NULL (never gated)
+ * is stale; `undefined` means the column is missing, and the stale path would delete
+ * every file before failing on the missing ci_call_sites table, so it throws instead.
+ */
+export function isExtractorVersionStale(
+  stored: number | null | undefined,
+  current: number = EXTRACTOR_VERSION,
+): boolean {
+  if (stored === undefined) {
+    throw new Error(
+      "ci_repos.extractor_version is missing: the database schema is out of date. Run `bun run db:migrate` and index again.",
+    );
+  }
+  return stored !== current;
+}
 
 export interface IndexResult {
   repoName: string;
@@ -61,16 +77,28 @@ export async function indexRepo(
 
   const repo = await upsertRepo(config.name, config.path);
 
-  const versionStale = repo.extractor_version !== EXTRACTOR_VERSION;
-  if (versionStale && !options.full) {
-    console.log(
-      `[yggdrasil] Extractor version ${repo.extractor_version ?? "none"} → ${EXTRACTOR_VERSION}: re-extracting all files`,
-    );
-  }
+  const versionStale = isExtractorVersionStale(repo.extractor_version);
 
   if (options.full || versionStale) {
-    const deleted = await sql`DELETE FROM ci_files WHERE repo_id = ${repo.id}`;
-    console.log(`[yggdrasil] Dropped ${deleted.count} existing files (cascades to symbols + edges)`);
+    const [{ count: existingFiles }] = await sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM ci_files WHERE repo_id = ${repo.id}`;
+    if (existingFiles > 0) {
+      if (versionStale && !options.full) {
+        console.log(
+          `[yggdrasil] Extractor version ${repo.extractor_version ?? "none"} → ${EXTRACTOR_VERSION}: re-extracting all files`,
+        );
+        if (options.skipEmbeddings) {
+          console.warn(
+            `[yggdrasil] WARNING: re-extracting drops every embedding of ${config.name}, and --no-embed skips regenerating them: semantic search stays dead until you run \`bun run embed\`.`,
+          );
+        }
+      }
+      const deleteStart = performance.now();
+      const deleted = await sql`DELETE FROM ci_files WHERE repo_id = ${repo.id}`;
+      console.log(
+        `[yggdrasil] Dropped ${deleted.count} existing files (cascades to symbols + edges) in ${Math.round(performance.now() - deleteStart)}ms`,
+      );
+    }
   }
 
   // Pre-load languages into a Map for sync lookup in the file loop
@@ -168,11 +196,11 @@ export async function indexRepo(
     const rebuilt = await rebuildEdges(repo.id);
     totalEdges += rebuilt.inheritanceEdges + rebuilt.callEdges;
     console.log(
-      `[yggdrasil] Rebuilt ${rebuilt.inheritanceEdges} inheritance + ${rebuilt.callEdges} call edges in ${Math.round(performance.now() - rebuildStart)}ms`,
+      `[yggdrasil] Rebuilt ${rebuilt.inheritanceEdges} inheritance + ${rebuilt.callEdges} call edges (whole repo) in ${Math.round(performance.now() - rebuildStart)}ms`,
     );
 
     if (totalEdges > 0) {
-      console.log(`[yggdrasil] Created ${totalEdges} total edges`);
+      console.log(`[yggdrasil] Created ${totalEdges} total edges (whole repo)`);
     }
   }
 
@@ -215,7 +243,7 @@ export async function indexRepo(
   const durationMs = Math.round(performance.now() - start);
 
   console.log(
-    `[yggdrasil] Indexed ${config.name}: ${changedFiles}/${files.length} files changed, ${totalSymbols} symbols, ${totalEdges} edges, ${durationMs}ms`,
+    `[yggdrasil] Indexed ${config.name}: ${changedFiles}/${files.length} files changed, ${totalSymbols} symbols, ${totalEdges} edges rebuilt (whole repo), ${durationMs}ms`,
   );
 
   return {

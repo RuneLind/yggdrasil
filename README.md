@@ -78,6 +78,8 @@ erDiagram
     ci_repos ||--o{ ci_files : contains
     ci_files ||--o{ ci_symbols : defines
     ci_files ||--o{ ci_import_map : imports
+    ci_files ||--o{ ci_call_sites : contains
+    ci_files ||--o{ ci_inheritance_refs : contains
     ci_symbols ||--o{ ci_call_sites : calls_from
     ci_symbols ||--o{ ci_inheritance_refs : declares
     ci_symbols ||--o{ ci_symbols : parent
@@ -143,9 +145,9 @@ erDiagram
     }
 ```
 
-Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones. A call site belongs to its innermost enclosing method, function or constructor.
+Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones. A call site belongs to the outermost method, function or constructor whose source range contains it, so calls inside an anonymous class, object expression or local function count for the host.
 
-When `ci_repos.extractor_version` differs from `EXTRACTOR_VERSION` in `src/indexer/index.ts`, a plain `bun run index` re-extracts every file, as with `--full`. Bump the constant whenever extraction output changes.
+When `ci_repos.extractor_version` differs from `EXTRACTOR_VERSION` in `src/indexer/index.ts`, a plain `bun run index` re-extracts every file, as with `--full`. Bump the constant whenever extraction output changes. The re-extract drops every embedding of the repo, so with `--no-embed` semantic search stays dead until you run `bun run embed`.
 
 ### MCP tools
 

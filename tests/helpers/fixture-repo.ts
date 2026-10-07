@@ -26,14 +26,17 @@ export interface FixtureEdge {
   target: string;
   kind: string;
   line: number | null;
+  sourceLine: number;
+  targetLine: number;
+  targetPath: string;
 }
 
 export interface FixtureRepo {
   name: string;
   path: string;
   index: IndexResult;
-  /** Overwrite or add `files`, then run an incremental `indexRepo` on the same repo. */
-  reindex(files?: Record<string, string>): Promise<IndexResult>;
+  /** Overwrite or add `files`, delete `remove`, then run an incremental `indexRepo`. */
+  reindex(files?: Record<string, string>, remove?: string[]): Promise<IndexResult>;
   /** All edges whose source and target both live in this repo, by qualified name. */
   edges(kind?: string): Promise<FixtureEdge[]>;
   /** Incoming edges to `targetQualifiedName`, optionally filtered by kind. */
@@ -80,7 +83,8 @@ export async function createFixtureRepo(
       const sourceFilter = filter.source ? sql`AND src.qualified_name = ${filter.source}` : sql``;
       const targetFilter = filter.target ? sql`AND tgt.qualified_name = ${filter.target}` : sql``;
       return sql<FixtureEdge[]>`
-        SELECT src.qualified_name AS source, tgt.qualified_name AS target, e.kind, e.line
+        SELECT src.qualified_name AS source, tgt.qualified_name AS target, e.kind, e.line,
+          src.start_line AS "sourceLine", tgt.start_line AS "targetLine", tf.path AS "targetPath"
         FROM ci_edges e
         JOIN ci_symbols src ON src.id = e.source_id
         JOIN ci_files sf ON sf.id = src.file_id
@@ -97,8 +101,9 @@ export async function createFixtureRepo(
       name,
       path,
       index,
-      reindex: async (changed = {}) => {
+      reindex: async (changed = {}, remove = []) => {
         await writeFiles(changed);
+        for (const rel of remove) await rm(join(path, rel));
         return runIndex();
       },
       edges: (kind) => edges({ kind }),

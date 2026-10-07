@@ -7,22 +7,18 @@ import type { ExtractedSymbol } from "./symbol-extractor.ts";
 const CALLABLE_KINDS: ReadonlySet<string> = new Set(["method", "function", "constructor"]);
 
 /**
- * Index of the innermost method, function or constructor whose line range contains
- * `line`, or null. The tightest span wins; on equal spans the later symbol wins, since
- * extraction emits symbols in document order and a nested declaration follows its host.
+ * Index of the outermost method, function or constructor whose source range contains
+ * `position`, or null. Outermost, so a call inside an anonymous class, object expression
+ * or local function belongs to the host callable that has callers; a source range, not
+ * a line span, so two callables on one line each keep their own calls.
  */
-export function innermostCallableIndex(symbols: ExtractedSymbol[], line: number): number | null {
+export function outermostCallableIndex(symbols: ExtractedSymbol[], position: number): number | null {
   let best: number | null = null;
   for (let i = 0; i < symbols.length; i++) {
     const sym = symbols[i];
     if (!CALLABLE_KINDS.has(sym.kind)) continue;
-    if (line < sym.startLine || line > sym.endLine) continue;
-    if (best === null) {
-      best = i;
-      continue;
-    }
-    const b = symbols[best];
-    if (sym.endLine - sym.startLine <= b.endLine - b.startLine) best = i;
+    if (position < sym.startIndex || position >= sym.endIndex) continue;
+    if (best === null || sym.startIndex < symbols[best].startIndex) best = i;
   }
   return best;
 }
@@ -39,7 +35,7 @@ export async function storeCallGraph(
 ): Promise<void> {
   const callRows = [];
   for (const call of callGraph.calls) {
-    const owner = innermostCallableIndex(symbols, call.line);
+    const owner = outermostCallableIndex(symbols, call.startIndex);
     const sourceId = owner === null ? undefined : symbolDbIds[owner];
     if (!sourceId) continue;
     callRows.push({
@@ -75,21 +71,21 @@ export interface RebuildResult {
 
 /**
  * Delete every calls/extends/implements edge whose source is in the repo and rebuild
- * them from ci_call_sites and ci_inheritance_refs, in one transaction. Runs after
- * resolveImports.
+ * them from ci_call_sites and ci_inheritance_refs, in one transaction. It reads neither
+ * ci_import_map nor import edges, so it does not depend on resolveImports running first.
  *
  * Resolution rules:
  * - Inheritance: the top-level container in the repo named `type_name`.
  * - Call with a `static-type` receiver: a method whose parent's qualified name is the
  *   receiver or ends with `.<receiver>`.
  * - Call with no receiver or `this`: a method whose parent has the same qualified name
- *   as the caller's parent.
+ *   as the caller's parent, preferring the caller's own file (the same class can exist
+ *   in two Gradle modules).
  * - Other receivers need type inference and produce no edge.
  *
  * The source itself is never a target. When several targets match, the first by
- * (qualified name, line, id) wins: the earlier in-memory resolver also kept one match,
- * but in DB row order, so ties fell arbitrarily.
- * Inheritance runs first so call resolution can walk it.
+ * (same file for an unqualified call, qualified name, line, id) wins: the earlier
+ * in-memory resolver also kept one match, but in DB row order, so ties fell arbitrarily.
  */
 export async function rebuildEdges(repoId: string): Promise<RebuildResult> {
   return sql.begin(async (tx) => {
@@ -147,7 +143,7 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
       JOIN ci_symbols src ON src.id = cs.source_symbol_id
       LEFT JOIN ci_symbols srcp ON srcp.id = src.parent_id
       JOIN ci_symbols t ON t.name = cs.method_name
-        AND t.kind IN ('method', 'function', 'constructor')
+        AND t.kind = ANY(${[...CALLABLE_KINDS]})
       JOIN ci_files tf ON tf.id = t.file_id AND tf.repo_id = f.repo_id
       JOIN ci_symbols tp ON tp.id = t.parent_id
       WHERE f.repo_id = ${repoId}
@@ -159,7 +155,8 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
           OR (cs.receiver_kind IN ('none', 'this')
             AND tp.qualified_name = srcp.qualified_name)
         )
-      ORDER BY cs.id, t.qualified_name, t.start_line, t.id
+      ORDER BY cs.id, (cs.receiver_kind <> 'static-type' AND t.file_id = cs.file_id) DESC,
+        t.qualified_name, t.start_line, t.id
     ) picked
     ON CONFLICT (source_id, target_id, kind, line) DO NOTHING
   `;
