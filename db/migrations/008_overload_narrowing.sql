@@ -2,8 +2,8 @@
 -- re-extract fills every column).
 
 -- Callables: one entry per parameter. param_types holds canonical simple names (boxed
--- twins folded: Long/long/java.lang.Long → long), NULL for a type parameter, array,
--- function type or vararg. extension_receiver: a Kotlin extension function's receiver
+-- twins folded: Long/long/java.lang.Long → long), NULL for a type parameter, Java array,
+-- function type or vararg (a Kotlin `Array<T>` stores "Array"). extension_receiver: a Kotlin extension function's receiver
 -- type, normalized like receiver_type.
 ALTER TABLE ci_symbols
   ADD COLUMN param_types TEXT[],
@@ -11,7 +11,7 @@ ALTER TABLE ci_symbols
   ADD COLUMN extension_receiver TEXT;
 
 -- One entry per argument: arg_types like param_types plus '#int' for an integer literal
--- without a suffix, NULL when unknown; arg_names: the parameter name of a Kotlin named
+-- that fits an Int (no suffix), NULL when unknown; arg_names: the parameter name of a Kotlin named
 -- argument, NULL when no argument is named. implicit_receiver_type: the declared type of
 -- the receiver of the enclosing Kotlin with/apply/run lambda (receiverless calls only).
 ALTER TABLE ci_call_sites

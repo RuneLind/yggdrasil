@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { countParams, declaredParamCount, intellijMethodName, intellijParamCount, intellijParamTypes } from "../scripts/eval-callers-parse.ts";
+import { countParams, declaredParamCount, intellijMethodName, intellijParamCount, intellijParamTypes, paramTypesMatch } from "../scripts/eval-callers-parse.ts";
 
 const strip = (s: string) => s.replace(/`/g, "");
 
@@ -65,5 +65,14 @@ describe("intellijParamTypes", () => {
 
   test("a type that is not an identifier path is unknown", () => {
     expect(intellijParamTypes("f((String) -> Unit, int[])")).toEqual([null, null]);
+  });
+});
+
+describe("paramTypesMatch", () => {
+  test("an unknown type on either side is a wildcard; known types must be equal", () => {
+    expect(paramTypesMatch(["long", null], ["long", "String"])).toBe(true);
+    expect(paramTypesMatch(["long", "String"], ["long", null])).toBe(true);
+    expect(paramTypesMatch(["long", "String"], ["long", "int"])).toBe(false);
+    expect(paramTypesMatch(["long"], ["long", null])).toBe(false);
   });
 });

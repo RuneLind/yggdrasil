@@ -61,9 +61,9 @@ export async function markFileIndexed(
  * Store the package of every changed file in one statement per 1,000 files; Phase 2
  * resolves same-package type names and functions against it.
  */
-export async function setFilePackages(rows: { fileId: string; packageName: string | null }[]): Promise<void> {
-  for (let i = 0; i < rows.length; i += 1000) {
-    const chunk = rows.slice(i, i + 1000);
+export async function setFilePackages(rows: { fileId: string; packageName: string | null }[], chunkSize = 1000): Promise<void> {
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
     await sql`
       UPDATE ci_files f SET package_name = v.package_name
       FROM (SELECT unnest(${sql.array(chunk.map((r) => r.fileId))}::uuid[]) AS id,

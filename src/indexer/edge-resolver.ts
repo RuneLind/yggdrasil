@@ -3,7 +3,7 @@ import type postgres from "postgres";
 import { CONTAINER_KINDS } from "./symbol-extractor.ts";
 import type { CallGraphResult } from "./call-graph.ts";
 import type { ExtractedSymbol } from "./symbol-extractor.ts";
-import { narrowOverloads, type TypeContext } from "./overloads.ts";
+import { fitOf, narrowOverloads, type TypeContext } from "./overloads.ts";
 
 const CALLABLE_KINDS: ReadonlySet<string> = new Set(["method", "function", "constructor"]);
 
@@ -108,15 +108,17 @@ export interface RebuildResult {
  *    lexically enclosing class outward (2, 3, …). Each lookup class contributes every
  *    method of its hierarchy whose parameter range admits the argument count and that
  *    is visible (a private method only from its own top-level class, or its own file for
- *    a top-level function); the first group with a candidate wins, and a method
- *    overridden in a subclass of its owner drops out. Sites with no member candidate
- *    try functions: imported, same-package, then wildcard-imported, one owner (file or
- *    class) per site; an extension function only when its receiver class is in the
- *    hierarchy of the call's receiver, or for a receiverless call, of a lookup class or
- *    the caller's own extension receiver. Argument types then narrow same-site
- *    overloads (narrowOverloads). The resolution is `implicit`'s and the receiver
- *    rule's: typed (a variable's or lambda receiver's type), static (a class name),
- *    local (receiverless or `this`).
+ *    a top-level function); a method overridden in a subclass of its owner (same group)
+ *    drops out. The first group with a candidate that the known argument types do not
+ *    rule out wins, else the first group with a candidate (narrowCandidates). Sites with
+ *    no member candidate try functions: imported, same-package, then wildcard-imported,
+ *    one owner (file or class) per site; an extension function when its receiver class
+ *    is in the hierarchy of the call's receiver, or for a receiverless call, of a lookup
+ *    class or the caller's own extension receiver, or when it is the only reachable
+ *    extension of that name. Argument types then narrow same-site overloads
+ *    (narrowOverloads). The resolution is `implicit`'s and the receiver rule's: typed (a
+ *    variable's or lambda receiver's type), static (a class name), local (receiverless
+ *    or `this`).
  *
  * The caller itself is never a target.
  */
@@ -367,9 +369,7 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
       JOIN ci_symbols t ON t.parent_id = h.ancestor_id AND t.name = s.method_name AND t.kind = ANY(${CALLABLES})
       WHERE ${arityFits} AND ${visible}
     )
-    SELECT site_id, resolution, owner_id, target_id, param_types, min_params, max_params
-    FROM (SELECT m.*, min(m.grp) OVER (PARTITION BY m.site_id) AS first_grp FROM member m) ranked
-    WHERE grp = first_grp
+    SELECT site_id, grp, resolution, owner_id, target_id, param_types, min_params, max_params FROM member
   `;
   await tx`CREATE INDEX ON ci_tmp_cands (site_id)`;
   await tx`ANALYZE ci_tmp_cands`;
@@ -379,7 +379,7 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
   await tx`
     DELETE FROM ci_tmp_cands a
     USING ci_tmp_cands b, ci_tmp_hierarchy h
-    WHERE b.site_id = a.site_id AND b.owner_id <> a.owner_id
+    WHERE b.site_id = a.site_id AND b.grp = a.grp AND b.owner_id <> a.owner_id
       AND h.class_id = b.owner_id AND h.ancestor_id = a.owner_id
       AND CASE
         WHEN a.param_types IS NOT NULL AND b.param_types IS NOT NULL
@@ -391,6 +391,12 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
 
   await insertFunctionCandidates(tx, repoId, arityFits, visible);
   await narrowCandidates(tx);
+  // Sites narrowCandidates left alone keep their first group.
+  await tx`
+    DELETE FROM ci_tmp_cands c
+    USING (SELECT site_id, min(grp) AS grp FROM ci_tmp_cands GROUP BY site_id) f
+    WHERE c.site_id = f.site_id AND c.grp > f.grp
+  `;
 
   const result = await tx`
     INSERT INTO ci_edges (source_id, target_id, kind, line, resolution)
@@ -409,7 +415,7 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
 /**
  * Functions for sites without a member candidate: receiverless calls reach top-level
  * functions and Java static imports; extension functions need their receiver class in
- * the site's context (see rebuildEdges). One owner per site: rank, the caller's file,
+ * the site's context, or to be the only one of the name (see rebuildEdges). One owner per site: rank, the caller's file,
  * owner id. A top-level function's owner is its file.
  */
 async function insertFunctionCandidates(
@@ -446,7 +452,7 @@ async function insertFunctionCandidates(
   await tx`CREATE INDEX ON ci_tmp_ext_ctx (site_id, class_id)`;
 
   await tx`
-    INSERT INTO ci_tmp_cands (site_id, resolution, owner_id, target_id, param_types, min_params, max_params)
+    INSERT INTO ci_tmp_cands (site_id, grp, resolution, owner_id, target_id, param_types, min_params, max_params)
     WITH fn AS (
       SELECT s.id AS site_id, 100 AS rank, t.id AS target_id, t.file_id AS target_file,
         coalesce(t.parent_id, t.file_id) AS owner_id
@@ -481,6 +487,11 @@ async function insertFunctionCandidates(
           SELECT 1 FROM ci_tmp_type_resolved x
           JOIN ci_tmp_ext_ctx c ON c.class_id = x.class_id AND c.site_id = fn.site_id
           WHERE x.ref_kind = 'ext' AND x.ref_id = fn.target_id)
+        -- Lambda receivers (DSL builders) are not modelled: a receiverless call reaches
+        -- the one reachable extension of its name, never one of several.
+        OR (s.receiver_kind = 'none' AND (
+          SELECT count(DISTINCT f2.target_id) FROM fn f2 JOIN ci_symbols t2 ON t2.id = f2.target_id
+          WHERE f2.site_id = fn.site_id AND t2.extension_receiver IS NOT NULL) = 1)
       END
     ),
     picked AS (
@@ -488,7 +499,7 @@ async function insertFunctionCandidates(
       FROM eligible e JOIN ci_tmp_fsites s ON s.id = e.site_id
       ORDER BY e.site_id, e.rank, (e.target_file = s.file_id) DESC, e.owner_id
     )
-    SELECT DISTINCT e.site_id, e.resolution, e.owner_id, e.target_id, t.param_types, t.min_params, t.max_params
+    SELECT DISTINCT e.site_id, 1, e.resolution, e.owner_id, e.target_id, t.param_types, t.min_params, t.max_params
     FROM eligible e
     JOIN picked p ON p.site_id = e.site_id AND p.owner_id = e.owner_id
     JOIN ci_symbols t ON t.id = e.target_id
@@ -496,26 +507,28 @@ async function insertFunctionCandidates(
 }
 
 /**
- * Drop the candidates whose parameters do not fit a site's known argument types or
- * names (narrowOverloads), at sites with more than one candidate.
+ * At sites with known argument types or names and more than one candidate, keep the
+ * first lookup group with a candidate that is not certainly incompatible, and in it the
+ * best fits (narrowOverloads); when no group has one, the first group whole.
  */
 async function narrowCandidates(tx: Tx): Promise<void> {
   const rows = await tx<{
-    site_id: string; target_id: string; arg_types: (string | null)[] | null; arg_names: (string | null)[] | null;
+    site_id: string; grp: number; target_id: string; language: string;
+    arg_types: (string | null)[] | null; arg_names: (string | null)[] | null;
     param_types: (string | null)[] | null; param_names: (string | null)[] | null;
   }[]>`
     -- to_json: postgres.js parses a NULL array element as the string "NULL".
-    SELECT c.site_id, c.target_id, to_json(cs.arg_types) AS arg_types, to_json(cs.arg_names) AS arg_names,
+    SELECT c.site_id, c.grp, c.target_id, f.language, to_json(cs.arg_types) AS arg_types, to_json(cs.arg_names) AS arg_names,
       to_json(t.param_types) AS param_types, to_json(t.param_names) AS param_names
     FROM ci_tmp_cands c
     JOIN ci_call_sites cs ON cs.id = c.site_id
+    JOIN ci_files f ON f.id = cs.file_id
     JOIN ci_symbols t ON t.id = c.target_id
     WHERE c.site_id IN (SELECT site_id FROM ci_tmp_cands GROUP BY site_id HAVING count(DISTINCT target_id) > 1)
       AND (cs.arg_names IS NOT NULL OR EXISTS (SELECT 1 FROM unnest(cs.arg_types) a WHERE a IS NOT NULL))
-    ORDER BY c.site_id
+    ORDER BY c.site_id, c.grp
   `;
   if (rows.length === 0) return;
-
   const classNames = new Set((await tx<{ name: string }[]>`SELECT DISTINCT name FROM ci_tmp_classes`).map((r) => r.name));
   const supers = new Map<string, Set<string>>();
   // Simple names of every supertype: resolved ancestors, and every clause entry of the
@@ -544,13 +557,15 @@ async function narrowCandidates(tx: Tx): Promise<void> {
   for (let i = 0; i < rows.length; ) {
     let j = i;
     while (j < rows.length && rows[j].site_id === rows[i].site_id) j++;
-    const site = { argTypes: rows[i].arg_types, argNames: rows[i].arg_names };
-    const group = rows.slice(i, j).map((r) => ({ id: r.target_id, paramTypes: r.param_types, paramNames: r.param_names }));
-    const kept = new Set(narrowOverloads(site, group, ctx).map((c) => c.id));
-    for (const c of group) {
-      if (!kept.has(c.id)) {
+    const site = { argTypes: rows[i].arg_types, argNames: rows[i].arg_names, language: rows[i].language };
+    const all = rows.slice(i, j).map((r) => ({ id: r.target_id, grp: r.grp, paramTypes: r.param_types, paramNames: r.param_names }));
+    const groups = [...new Set(all.map((c) => c.grp))].map((g) => all.filter((c) => c.grp === g));
+    const applicable = groups.find((g) => g.some((c) => fitOf(site, c, ctx) > 0));
+    const kept = new Set((applicable ? narrowOverloads(site, applicable, ctx) : groups[0]).map((c) => `${c.grp}:${c.id}`));
+    for (const c of all) {
+      if (!kept.has(`${c.grp}:${c.id}`)) {
         dropSites.push(rows[i].site_id);
-        dropTargets.push(c.id);
+        dropTargets.push(`${c.grp}:${c.id}`);
       }
     }
     i = j;
@@ -558,7 +573,7 @@ async function narrowCandidates(tx: Tx): Promise<void> {
   if (dropSites.length === 0) return;
   await tx`
     DELETE FROM ci_tmp_cands c
-    USING (SELECT unnest(${tx.array(dropSites)}::uuid[]) AS site_id, unnest(${tx.array(dropTargets)}::uuid[]) AS target_id) d
-    WHERE c.site_id = d.site_id AND c.target_id = d.target_id
+    USING (SELECT unnest(${tx.array(dropSites)}::uuid[]) AS site_id, unnest(${tx.array(dropTargets)}::text[]) AS key) d
+    WHERE c.site_id = d.site_id AND c.grp || ':' || c.target_id = d.key
   `;
 }

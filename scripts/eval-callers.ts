@@ -19,7 +19,7 @@ import { sql, closeDb } from "../src/db/connection.ts";
 import { getRepo } from "../src/db/repos.ts";
 import { findSymbolByQualifiedName } from "../src/db/symbols.ts";
 import { analyzeImpactBySymbolId } from "../src/search/impact.ts";
-import { intellijMethodName, intellijParamCount, intellijParamTypes, declaredParamCount } from "./eval-callers-parse.ts";
+import { intellijMethodName, intellijParamCount, intellijParamTypes, declaredParamCount, paramTypesMatch } from "./eval-callers-parse.ts";
 
 interface FixtureCaller {
   signature: string;
@@ -61,12 +61,6 @@ const hits = (s: Score) => [...s.found].filter((k) => s.expected.has(k)).length;
 const falsePositives = (s: Score) => s.found.size - hits(s);
 
 const pct = (num: number, den: number) => (den === 0 ? "  -  " : `${((100 * num) / den).toFixed(0).padStart(3)}%`);
-
-/** Same length, and equal at every position where both types are known. */
-function paramTypesMatch(want: (string | null)[], have: (string | null)[] | null | undefined): boolean {
-  if (!have || have.length !== want.length) return false;
-  return want.every((w, i) => w === null || have[i] === null || w === have[i]);
-}
 
 function split(keys: Set<string>): { prod: Set<string>; all: Set<string> } {
   return { prod: new Set([...keys].filter((k) => !isTest(k))), all: keys };

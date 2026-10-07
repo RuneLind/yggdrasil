@@ -1,5 +1,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { createFixtureRepo, type FixtureRepo } from "./helpers/fixture-repo.ts";
+import { sql } from "../src/db/connection.ts";
+import { setFilePackages } from "../src/db/files.ts";
 
 /**
  * Rules of the repo-wide edge rebuild (rebuildEdges) that no other test pins: each test
@@ -103,5 +105,73 @@ public class T {
       "src/main/kotlin/p/A.kt": "package p\n\nclass A {\n    fun g() = 1\n    fun f(a: A) { g(); a.g() }\n}\n",
     });
     expect((await repo.edgesFrom("p.A.f", "calls")).map((e) => `${e.target}@${e.resolution}`)).toEqual(["p.A.g@typed"]);
+  });
+
+  test("a member method hides a same-package function of the same name", async () => {
+    repo = await createFixtureRepo({
+      "src/main/kotlin/p/F.kt": "package p\n\nfun foo() = 0\n\nclass M {\n    fun foo() = 1\n    fun c() { foo() }\n}\n",
+    });
+    expect((await repo.edgesFrom("p.M.c", "calls")).map((e) => e.target)).toEqual(["p.M.foo"]);
+  });
+
+  test("a this-qualified call in an inner class does not walk to the outer class", async () => {
+    repo = await createFixtureRepo({
+      "src/main/java/p/O.java": `package p;
+
+public class O {
+    void outer() {}
+    class I { void c() { this.outer(); } }
+}
+`,
+    });
+    expect(await repo.edgesFrom("p.O.I.c", "calls")).toEqual([]);
+  });
+
+  test("an own member type outranks an inherited member type of the same name", async () => {
+    repo = await createFixtureRepo({
+      "src/main/java/p/B.java": "package p;\n\npublic class B {\n    public static class X { public static void s() {} }\n}\n",
+      "src/main/java/p/A.java": `package p;
+
+public class A extends B {
+    public static class X { public static void s() {} }
+    void c() { X.s(); }
+}
+`,
+    });
+    expect((await repo.edgesFrom("p.A.c", "calls")).map((e) => e.target)).toEqual(["p.A.X.s"]);
+  });
+
+  test("an external supertype from the extends clause makes a certain fit", async () => {
+    repo = await createFixtureRepo({
+      "src/main/java/p/MyEx.java": "package p;\n\npublic class MyEx extends RuntimeException {}\n",
+      "src/main/java/p/H.java": `package p;
+
+public class H {
+    void h(RuntimeException e) {}
+    void h(Iterable<?> i) {}
+    void c(MyEx e) { h(e); }
+}
+`,
+    });
+    expect((await repo.edgesFrom("p.H.c", "calls")).map((e) => e.targetLine)).toEqual([4]);
+  });
+
+  test("a top-level function does not match a typed receiver", async () => {
+    repo = await createFixtureRepo({
+      "src/main/kotlin/p/G.kt": "package p\n\nfun bar() = 0\n\nclass Foo\n\nclass U(private val f: Foo) {\n    fun c() { f.bar() }\n}\n",
+    });
+    expect(await repo.edgesFrom("p.U.c", "calls")).toEqual([]);
+  });
+
+  test("setFilePackages updates every row across several chunks", async () => {
+    repo = await createFixtureRepo(
+      Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`src/main/java/p/C${i}.java`, `package p;\n\npublic class C${i} {}\n`])),
+    );
+    const files = await sql<{ id: string; path: string }[]>`
+      SELECT f.id, f.path FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id WHERE r.name = ${repo.name} ORDER BY f.path`;
+    await setFilePackages(files.map((f) => ({ fileId: f.id, packageName: `q.${f.path.slice(-7, -5)}` })), 2);
+    const after = await sql<{ package_name: string }[]>`
+      SELECT f.package_name FROM ci_files f JOIN ci_repos r ON r.id = f.repo_id WHERE r.name = ${repo.name} ORDER BY f.path`;
+    expect(after.map((r) => r.package_name)).toEqual(["q.C0", "q.C1", "q.C2", "q.C3", "q.C4"]);
   });
 });

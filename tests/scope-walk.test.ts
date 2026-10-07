@@ -252,3 +252,92 @@ describe("scope walk cost", () => {
     expect(performance.now() - start).toBeLessThan(2000);
   });
 });
+
+describe("type-parameter arguments", () => {
+  const args = async (lang: SupportedLanguage, src: string, method: string) => (await call(lang, src, method)).argTypes;
+
+  test("Java: a type parameter's bound, or unknown without one", async () => {
+    expect(await args("java", `class C { <T extends Behandling> void f(T t) { svc.lagre(t); } }`, "lagre")).toEqual(["Behandling"]);
+    expect(await args("java", `class C<T> { T x; void f() { svc.lagre(x); } }`, "lagre")).toEqual([null]);
+    expect(await args("java", `class C { <T extends A & B> void f(T t) { svc.lagre(t); } }`, "lagre")).toEqual([null]);
+  });
+
+  test("Kotlin: a type parameter's bound, or unknown without one", async () => {
+    expect(await args("kotlin", `fun <T> f(t: T) { g(t) }`, "g")).toEqual([null]);
+    expect(await args("kotlin", `fun <T : Beh> f(t: T?) { g(t) }`, "g")).toEqual(["Beh"]);
+    expect(await args("kotlin", `class C<T>(val x: T) { fun f() { g(x) } }`, "g")).toEqual([null]);
+  });
+});
+
+describe("Java pattern bindings stay in their positive branch", () => {
+  test("a binding in a field initializer does not overwrite the field", async () => {
+    const src = `class C { Foo s; static boolean b = O.o instanceof Bar s; void f() { this.s.y(); s.z(); } }`;
+    expect(await typeOf("java", src, "y")).toBe("Foo");
+    expect(await typeOf("java", src, "z")).toBe("Foo");
+  });
+
+  test("typed in the then-branch and the RHS of &&; unknown after the if, in else and under a negation", async () => {
+    const src = `class C { Foo s; void f(Object o) {
+      if (o instanceof Bar s) { s.inThen(); } else { s.inElse(); }
+      s.after();
+      boolean b = o instanceof Bar s && s.inAnd();
+      if (!(o instanceof Bar s)) { s.inNegated(); }
+    } }`;
+    const { calls } = await extract("java", src);
+    const t = (m: string) => calls.find((c) => c.methodName === m)!.receiverType;
+    expect([t("inThen"), t("inElse"), t("after"), t("inAnd"), t("inNegated")]).toEqual(["Bar", null, null, "Bar", null]);
+  });
+
+  test("a switch pattern binding does not leak past the switch", async () => {
+    const src = `class C { Foo e; void f(Object o) { switch (o) { case Qux e -> e.y(); default -> {} } e.after(); } }`;
+    expect(await typeOf("java", src, "after")).toBe("Foo");
+  });
+});
+
+describe("labeled this as an argument", () => {
+  test("typed only when the label names an enclosing class or an extension function", async () => {
+    const { calls } = await extract(
+      "kotlin",
+      `class Outer {\n  inner class In {\n    fun f(o: Other) {\n      o.apply {\n        g(this@apply)\n        k(this@Outer)\n      }\n    }\n  }\n}`,
+    );
+    const a = (m: string) => calls.find((c) => c.methodName === m)!.argTypes;
+    expect([a("g"), a("k")]).toEqual([[null], ["Outer"]]);
+    expect((await call("kotlin", `fun Foo.e() { h(this@e) }`, "h")).argTypes).toEqual(["Foo"]);
+  });
+});
+
+describe("Kotlin constructor parameters in accessors", () => {
+  test("a getter sees the member, not the plain constructor parameter", async () => {
+    const src = `class C(repo: CtorRepo) {\n  val repo: Member = Member()\n  val g: Int get() = repo.save()\n}`;
+    expect(await typeOf("kotlin", src, "save")).toBe("Member");
+  });
+
+  test("the initializer of the same property still sees the parameter", async () => {
+    const src = `class C(repo: CtorRepo) {\n  val repo: Member = Member()\n  val g: Int = repo.save()\n}`;
+    expect(await typeOf("kotlin", src, "save")).toBe("CtorRepo");
+  });
+});
+
+describe("Kotlin integer literal types", () => {
+  test("out of Int range is Long, an L suffix is Long, an unsigned literal (also hex) is UInt", async () => {
+    const c = await call("kotlin", `fun f() { g(3000000000, 0xFFFFFFFF, 7L, 0xFFu, 1u, 2147483647, 0x7FFF_FFFF) }`, "g");
+    expect(c.argTypes).toEqual(["long", "long", "long", "UInt", "UInt", "#int", "#int"]);
+  });
+
+  test("a property's literal initializer gets the same type", async () => {
+    const { calls } = await extract("kotlin", `fun f() { val big = 3000000000\n val u = 0xFFu\n g(big, u) }`);
+    expect(calls.find((c) => c.methodName === "g")!.argTypes).toEqual(["long", "UInt"]);
+  });
+});
+
+describe("Kotlin implicit receivers across class boundaries", () => {
+  test("an object literal inside with(x) keeps x as implicit receiver", async () => {
+    const src = `class K(private val o: Other) {\n  fun f() {\n    with(o) {\n      val r = object : Runnable {\n        override fun run() { bar() }\n      }\n    }\n  }\n}`;
+    expect((await call("kotlin", src, "bar")).implicitReceiverType).toBe("Other");
+  });
+
+  test("a local class inside with(x) stops it (its own members come first)", async () => {
+    const src = `class K(private val o: Other) {\n  fun g() {\n    with(o) {\n      class L {\n        fun m() { baz() }\n      }\n    }\n  }\n}`;
+    expect((await call("kotlin", src, "baz")).implicitReceiverType).toBeNull();
+  });
+});

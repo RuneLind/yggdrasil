@@ -362,8 +362,10 @@ class Typed(private val p: Medlemskapsperiode) {
 
   const EXT = "ex.trygdeavgiftsperiode:3";
 
-  test("a receiverless call from an unrelated class does not reach the extension", async () => {
-    expect((await targetsFrom(repo, "ex.TestBase.lag")).filter((t) => t.startsWith(EXT))).toEqual([]);
+  // Accepted false positive: `build`'s lambda receiver (Builder) is not modelled, and the
+  // single reachable extension of the name wins (DSL builders, ~2,000 correct edges).
+  test("a receiverless call from an unrelated class reaches the only extension of that name", async () => {
+    expect((await targetsFrom(repo, "ex.TestBase.lag")).filter((t) => t.startsWith(EXT))).toEqual([`${EXT}@local`]);
   });
 
   test("an extension on the receiver type and a subclass member reach it", async () => {
@@ -415,5 +417,143 @@ class K(private val o: Other) {
 
   test("a method the receiver lacks falls back to the own class", async () => {
     expect((await targetsFrom(repo, "sf.K.fallback")).filter((t) => t.includes(".baz:"))).toEqual(["sf.K.baz:9@local"]);
+  });
+});
+
+describe.skipIf(!RUN)("a catch-all overload never hides a more specific applicable one", () => {
+  let repo: FixtureRepo;
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({
+      "src/main/java/ca/MyEx.java": "package ca;\n\npublic class MyEx extends RuntimeException {}\n",
+      "src/main/java/ca/Beh.java": "package ca;\n\npublic class Beh {}\n",
+      "src/main/java/ca/S.java": `package ca;
+
+import java.util.Collection;
+import java.util.List;
+
+public class S {
+    public void log(Object o) {}
+    public void log(Throwable t) {}
+    public void c(Collection<?> c) {}
+    public void c(Object o) {}
+    public void f(Beh b) {}
+    public void f(Object o) {}
+    public void num(double d) {}
+    public void num(Object o) {}
+    void viaEx() { log(new MyEx()); }
+    void viaList(List<String> xs) { c(xs); }
+    <T extends Beh> void viaBound(T x) { f(x); }
+    void viaLiteral() { num(1); }
+}
+`,
+      "src/main/kotlin/ca/K.kt": `package ca
+
+class K {
+    fun f(b: Beh) {}
+    fun f(o: Any?) {}
+    fun <T : Beh> viaBound(x: T) { f(x) }
+}
+`,
+    });
+  });
+  afterAll(async () => repo?.cleanup());
+
+  const lines = async (source: string) => (await targetsFrom(repo, source)).map((t) => t.replace(/@.*/, ""));
+
+  test("log(new MyEx()) keeps log(Throwable) next to log(Object)", async () => {
+    expect(await lines("ca.S.viaEx")).toEqual(["ca.S.log:7", "ca.S.log:8"]);
+  });
+
+  test("c(List) keeps c(Collection) next to c(Object)", async () => {
+    expect(await lines("ca.S.viaList")).toEqual(["ca.S.c:10", "ca.S.c:9"]);
+  });
+
+  test("Java: a type parameter bounded by Beh picks f(Beh)", async () => {
+    expect(await lines("ca.S.viaBound")).toEqual(["ca.S.f:11"]);
+  });
+
+  test("Kotlin: a type parameter bounded by Beh picks f(Beh)", async () => {
+    expect(await lines("ca.K.viaBound")).toEqual(["ca.K.f:4"]);
+  });
+
+  test("Java num(1) keeps num(double): an int literal widens to double", async () => {
+    expect(await lines("ca.S.viaLiteral")).toEqual(["ca.S.num:13"]);
+  });
+});
+
+describe.skipIf(!RUN)("an inapplicable lookup group does not block the next one", () => {
+  let repo: FixtureRepo;
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({
+      "src/main/kotlin/gr/K.kt": `package gr
+
+class Other {
+    fun bar(s: String) = 1
+}
+
+class K(private val o: Other) {
+    fun bar(i: Int) = 2
+    fun viaApply() { o.apply { bar(1) } }
+    fun viaApplyString() { o.apply { bar("x") } }
+
+    inner class In {
+        fun bar(s: String) = 3
+        fun call() { bar(1) }
+    }
+}
+`,
+    });
+  });
+  afterAll(async () => repo?.cleanup());
+
+  test("apply: Other.bar(String) does not take bar(1); K.bar(Int) does", async () => {
+    expect(await targetsFrom(repo, "gr.K.viaApply")).toEqual(["gr.K.bar:8@local"]);
+  });
+
+  test("apply: an applicable receiver member still wins", async () => {
+    expect((await targetsFrom(repo, "gr.K.viaApplyString")).filter((t) => t.includes(".bar:"))).toEqual(["gr.Other.bar:4@typed"]);
+  });
+
+  test("an inner class's inapplicable bar(String) does not block the outer bar(Int)", async () => {
+    expect(await targetsFrom(repo, "gr.K.In.call")).toEqual(["gr.K.bar:8@local"]);
+  });
+});
+
+describe.skipIf(!RUN)("receiverless calls to extension functions", () => {
+  let repo: FixtureRepo;
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({
+      "src/main/kotlin/dsl/Builders.kt": `package dsl
+
+class BehandlingBuilder
+class FagsakBuilder
+class A
+class B
+
+fun behandling(init: BehandlingBuilder.() -> Unit) {}
+fun BehandlingBuilder.fagsak(init: FagsakBuilder.() -> Unit) {}
+fun A.dup() {}
+fun B.dup() {}
+`,
+      "src/test/kotlin/dsl/UseTest.kt": `package dsl
+
+class UseTest {
+    fun single() { behandling { fagsak { } } }
+    fun ambiguous() { behandling { dup() } }
+}
+`,
+    });
+  });
+  afterAll(async () => repo?.cleanup());
+
+  test("the single reachable extension of that name gets a local edge", async () => {
+    expect((await targetsFrom(repo, "dsl.UseTest.single")).filter((t) => t.startsWith("dsl.fagsak"))).toEqual(["dsl.fagsak:9@local"]);
+  });
+
+  test("two same-named extensions, neither matching the receiver context, get no edge", async () => {
+    expect(await targetsFrom(repo, "dsl.UseTest.ambiguous")).toEqual(["dsl.behandling:8@local"]);
   });
 });

@@ -113,7 +113,7 @@ export function extractSymbols(
 
   for (const match of matches) {
     // Use a Map to avoid prototype chain issues with capture names like "constructor"
-    const captures = new Map<string, import("web-tree-sitter").SyntaxNode>();
+    const captures = new Map<string, SyntaxNode>();
     for (const c of match.captures) {
       captures.set(c.name, c.node);
     }
@@ -251,12 +251,23 @@ export function kotlinVariableType(decl: SyntaxNode, value: SyntaxNode | null | 
   return null;
 }
 
+/** Kotlin integer literal: Long with an L suffix or out of Int range; unsigned (hex too) is UInt/ULong. */
+export function kotlinIntegerLiteralType(text: string): "Int" | "Long" | "UInt" | "ULong" {
+  const long = /[lL]$/.test(text);
+  let value = 0n;
+  try {
+    value = BigInt(text.replace(/[uUlL_]/g, ""));
+  } catch { /* not a plain integer: keep the suffix's type */ }
+  if (/[uU][lL]?$/.test(text)) return long || value > 0xFFFFFFFFn ? "ULong" : "UInt";
+  return long || value > 2147483647n ? "Long" : "Int";
+}
+
 function kotlinLiteralType(value: SyntaxNode, source: string): string | null {
   const text = nodeText(value, source);
   switch (value.type) {
     case "string_literal": return "String";
     case "character_literal": return "Char";
-    case "number_literal": return /[uU]/.test(text) && !/^0[xX]/.test(text) ? null : /[lL]$/.test(text) ? "Long" : "Int";
+    case "number_literal": return kotlinIntegerLiteralType(text);
     case "float_literal": return /[fF]$/.test(text) ? "Float" : "Double";
     case "identifier": return text === "true" || text === "false" ? "Boolean" : null;
     default: return null;
@@ -381,7 +392,7 @@ function getSymbolKind(match: ReturnType<Query["matches"]>[0]): SymbolKind {
   return "unknown";
 }
 
-function extractSignature(source: string, node: import("web-tree-sitter").SyntaxNode): string | null {
+function extractSignature(source: string, node: SyntaxNode): string | null {
   // Get text from start of node to first { or = (declaration without body)
   // Use source substring as fallback — some tree-sitter WASM builds don't populate .text reliably
   const text = nodeText(node, source);
@@ -393,7 +404,7 @@ function extractSignature(source: string, node: import("web-tree-sitter").Syntax
 
 function extractDocComment(
   source: string,
-  node: import("web-tree-sitter").SyntaxNode,
+  node: SyntaxNode,
 ): string | null {
   // Look for a comment node immediately before this node
   const prev = node.previousNamedSibling;
@@ -424,7 +435,7 @@ function extractVisibility(node: SyntaxNode, lang: SupportedLanguage, source: st
   return null;
 }
 
-function checkStatic(node: import("web-tree-sitter").SyntaxNode): boolean {
+function checkStatic(node: SyntaxNode): boolean {
   const modifiers = findNamedChild(node, "modifiers");
   if (modifiers) return (modifiers.text ?? "").includes("static");
   // Fallback: check the first line of the declaration text

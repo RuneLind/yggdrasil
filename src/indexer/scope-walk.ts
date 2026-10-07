@@ -1,6 +1,6 @@
 import type { Node as SyntaxNode } from "web-tree-sitter";
 import { nodeText, findNamedChild } from "./ast-utils.ts";
-import { normalizeTypeName, kotlinVariableType } from "./symbol-extractor.ts";
+import { normalizeTypeName, kotlinVariableType, kotlinIntegerLiteralType } from "./symbol-extractor.ts";
 import { canonicalType } from "./overloads.ts";
 
 /**
@@ -73,6 +73,12 @@ interface Frame {
   thisType?: string | null;
   /** Kotlin with/apply/run lambdas only: the receiver's declared type (null: unknown). */
   implicitReceiver?: string | null;
+  /** Type parameters this declaration introduces → their single bound (null: none or several). */
+  typeParams?: Map<string, Decl>;
+  /** Kotlin extension functions: the function name, which `this@name` labels. */
+  label?: string;
+  /** Java: a positive pattern branch; bindings declared unknown skip it (see declareUnknown). */
+  transient?: boolean;
 }
 
 class Scope {
@@ -123,14 +129,54 @@ class Scope {
     return null;
   }
 
-  /** Kotlin: the innermost with/apply/run receiver type, not looking past a class body. */
+  /**
+   * Kotlin: the innermost with/apply/run receiver type. An object literal keeps the outer
+   * receiver; a named (local) class stops, since its own members would have to come first.
+   */
   implicitReceiver(): string | null {
     for (let i = this.frames.length - 1; i >= 0; i--) {
       const f = this.frames[i];
       if (f.implicitReceiver !== undefined) return f.implicitReceiver;
-      if (f.className !== undefined) return null;
+      if (f.className) return null;
     }
     return null;
+  }
+
+  /** Kotlin `this@label`: an enclosing class, or an extension function's receiver; else null. */
+  labeledThis(label: string): string | null {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      const f = this.frames[i];
+      if (f.className === label) return canonicalType(label);
+      if (f.label === label) return f.thisType ?? null;
+    }
+    return null;
+  }
+
+  /** A type parameter in scope named `name`: its bound (null: none); undefined when not one. */
+  typeParam(name: string): Decl | undefined {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      const tp = this.frames[i].typeParams;
+      if (tp?.has(name)) return tp.get(name);
+    }
+    return undefined;
+  }
+
+  /** The canonical type of a declaration, a type parameter read as its bound. */
+  argType(d: Decl | undefined): string | null {
+    if (!d) return null;
+    const bound = d.includes(".") ? undefined : this.typeParam(d);
+    if (bound === undefined) return canonicalType(d);
+    return bound && this.typeParam(bound) === undefined ? canonicalType(bound) : null;
+  }
+
+  /** Java: shadow `name` as unknown in the innermost block, never in a class body. */
+  declareUnknown(name: string): void {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      const f = this.frames[i];
+      if (f.transient) continue;
+      if (f.className === undefined) f.names.set(name, null);
+      return;
+    }
   }
 }
 
@@ -169,6 +215,21 @@ function all(node: SyntaxNode): SyntaxNode[] {
 
 const declType = (d: Decl | undefined): string | null => (d ? canonicalType(d) : null);
 
+/** Type parameters of a class or callable → their bound when there is exactly one. */
+function typeParamBounds(owner: SyntaxNode | null | undefined, source: string): Map<string, Decl> | undefined {
+  const tps = owner ? owner.childForFieldName("type_parameters") ?? findNamedChild(owner, "type_parameters") : null;
+  if (!tps) return undefined;
+  const bounds = new Map<string, Decl>();
+  for (const tp of named(tps)) {
+    if (tp.type !== "type_parameter") continue;
+    const parts = named(tp).filter((c) => !/annotation|modifiers/.test(c.type));
+    if (!parts[0]) continue;
+    const bound = parts[1]?.type === "type_bound" ? named(parts[1]) : parts.slice(1);
+    bounds.set(nodeText(parts[0], source), bound.length === 1 ? normalizeTypeName(nodeText(bound[0], source)) : null);
+  }
+  return bounds;
+}
+
 // ── Java ──
 
 function javaType(node: SyntaxNode | null, source: string): Decl {
@@ -198,7 +259,7 @@ function javaClassFrame(body: SyntaxNode, source: string): Frame {
     }
   }
   const nameNode = owner && owner.type !== "object_creation_expression" ? owner.childForFieldName("name") : null;
-  return { names, className: nameNode ? nodeText(nameNode, source) : null };
+  return { names, className: nameNode ? nodeText(nameNode, source) : null, typeParams: typeParamBounds(owner, source) };
 }
 
 function javaParamFrame(owner: SyntaxNode, source: string): Frame {
@@ -212,7 +273,28 @@ function javaParamFrame(owner: SyntaxNode, source: string): Frame {
       if (n) names.set(nodeText(n, source), null);
     } else if (p.type === "identifier") names.set(nodeText(p, source), null);
   }
-  return { names };
+  return { names, typeParams: typeParamBounds(owner, source) };
+}
+
+/** Bindings an `instanceof` declares: `o instanceof Bar s`, or a record pattern's components. */
+function javaInstanceofBindings(node: SyntaxNode, source: string): Map<string, Decl> {
+  const names = new Map<string, Decl>();
+  const name = node.childForFieldName("name");
+  if (name) names.set(nodeText(name, source), javaType(node.childForFieldName("right"), source));
+  else addJavaPatternBindings(node, names, source);
+  return names;
+}
+
+/** Bindings certainly in effect when `cond` is true: through parentheses and `&&` only. */
+function javaPositiveBindings(cond: SyntaxNode | null, source: string, names = new Map<string, Decl>()): Map<string, Decl> {
+  if (!cond) return names;
+  if (cond.type === "parenthesized_expression") return javaPositiveBindings(named(cond)[0] ?? null, source, names);
+  if (cond.type === "instanceof_expression") for (const [k, v] of javaInstanceofBindings(cond, source)) names.set(k, v);
+  else if (cond.type === "binary_expression" && cond.childForFieldName("operator")?.type === "&&") {
+    javaPositiveBindings(cond.childForFieldName("left"), source, names);
+    javaPositiveBindings(cond.childForFieldName("right"), source, names);
+  }
+  return names;
 }
 
 /** Pattern variables under `node` (type patterns, record pattern components) → `names`. */
@@ -253,7 +335,7 @@ function javaArgType(arg: SyntaxNode, scope: Scope, source: string): string | nu
     case "object_creation_expression":
       return declType(javaType(arg.childForFieldName("type"), source));
     case "identifier":
-      return declType(scope.lookup(text()));
+      return scope.argType(scope.lookup(text()));
     case "parenthesized_expression":
     case "unary_expression": {
       const inner = named(arg)[0];
@@ -314,15 +396,29 @@ export function extractJavaCalls(root: SyntaxNode, source: string, calls: Extrac
       scope.pop();
       return;
     }
+    // A pattern binding is typed only in the branch where its test held: an if's
+    // consequence, the right side of `&&`, a switch rule (its own block frame).
+    // Everywhere else in the block it is unknown (flow scoping is not modelled).
+    const positiveBranch = node.type === "if_statement" ? node.childForFieldName("consequence")
+      : node.type === "binary_expression" && node.childForFieldName("operator")?.type === "&&" ? node.childForFieldName("right")
+      : null;
+    if (positiveBranch) {
+      const test = node.type === "if_statement" ? node.childForFieldName("condition") : node.childForFieldName("left");
+      for (const c of all(node)) {
+        if (c.id !== positiveBranch.id) visit(c);
+        else {
+          scope.push({ names: javaPositiveBindings(test, source), transient: true });
+          visit(c);
+          scope.pop();
+        }
+      }
+      return;
+    }
     if (node.type === "method_invocation") recordJavaCall(node);
     visitChildren(node);
-    // Pattern variables stay in scope for the rest of the enclosing block (an
-    // approximation of flow scoping: the then-branch and after a negated test).
     if (node.type === "instanceof_expression") {
-      const name = node.childForFieldName("name");
-      if (name) scope.top().names.set(nodeText(name, source), javaType(node.childForFieldName("right"), source));
-      else addJavaPatternBindings(node, scope.top().names, source);
-    } else if (node.type === "switch_label") {
+      for (const name of javaInstanceofBindings(node, source).keys()) scope.declareUnknown(name);
+    } else if (node.type === "switch_label" && scope.top().className === undefined) {
       addJavaPatternBindings(node, scope.top().names, source);
     }
   };
@@ -426,7 +522,10 @@ function kotlinClassFrame(body: SyntaxNode, source: string): { frame: Frame; cto
   const nameNode = owner && (owner.type === "class_declaration" || owner.type === "object_declaration")
     ? owner.childForFieldName("name") ?? findNamedChild(owner, "identifier")
     : null;
-  return { frame: { names, className: nameNode ? nodeText(nameNode, source) : null }, ctorParams };
+  return {
+    frame: { names, className: nameNode ? nodeText(nameNode, source) : null, typeParams: typeParamBounds(owner, source) },
+    ctorParams,
+  };
 }
 
 function kotlinParamFrame(owner: SyntaxNode, source: string): Frame {
@@ -434,13 +533,14 @@ function kotlinParamFrame(owner: SyntaxNode, source: string): Frame {
   for (const p of named(findNamedChild(owner, "function_value_parameters") ?? owner)) {
     if (p.type === "parameter") names.set(nodeText(p.namedChild(0) ?? p, source), kotlinVariableType(p, null, source));
   }
-  const frame: Frame = { names };
+  const frame: Frame = { names, typeParams: typeParamBounds(owner, source) };
   if (owner.type === "function_declaration") {
     const children = all(owner);
     const nameAt = children.findIndex((c) => c.id === owner.childForFieldName("name")?.id);
     if (nameAt >= 2 && children[nameAt - 1].type === ".") {
       const t = normalizeTypeName(nodeText(children[nameAt - 2], source));
       frame.thisType = t ? canonicalType(t) : null;
+      frame.label = nodeText(children[nameAt], source);
     }
   }
   return frame;
@@ -453,17 +553,19 @@ function kotlinArgType(arg: SyntaxNode, scope: Scope, source: string): string | 
       return "String";
     case "character_literal":
       return "char";
-    case "number_literal":
-      return /[uU]/.test(text) && !/^0[xX]/.test(text) ? null : /[lL]$/.test(text) ? "long" : "#int";
+    case "number_literal": {
+      const t = kotlinIntegerLiteralType(text);
+      return t === "Int" ? "#int" : t === "Long" ? "long" : t;
+    }
     case "float_literal":
       return /[fF]$/.test(text) ? "float" : "double";
     case "identifier":
       if (text === "true" || text === "false") return "boolean";
       if (text === "null") return null;
-      return declType(scope.lookup(text));
+      return scope.argType(scope.lookup(text));
     case "this_expression": {
       const label = findNamedChild(arg, "identifier");
-      return label ? nodeText(label, source) : scope.thisType();
+      return label ? scope.labeledThis(nodeText(label, source)) : scope.thisType();
     }
     case "call_expression": {
       const callee = arg.namedChild(0);
@@ -606,10 +708,21 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
     if (KOTLIN_CLASS_BODIES.has(node.type)) {
       const { frame, ctorParams } = kotlinClassFrame(node, source);
       scope.push(frame);
+      // Plain constructor parameters are in scope in property initializers and init
+      // blocks, not in a property's getter or setter.
       for (const c of all(node)) {
-        const initializer = c.type === "property_declaration" || c.type === "anonymous_initializer";
-        if (initializer && ctorParams.size > 0) visitIn({ names: ctorParams }, c);
-        else visit(c);
+        if (ctorParams.size === 0 || (c.type !== "property_declaration" && c.type !== "anonymous_initializer")) visit(c);
+        else if (c.type === "anonymous_initializer") visitIn({ names: ctorParams }, c);
+        else {
+          for (const p of all(c)) {
+            if (p.type === "getter" || p.type === "setter") visit(p);
+            else {
+              scope.push({ names: ctorParams });
+              visit(p);
+              scope.pop();
+            }
+          }
+        }
       }
       scope.pop();
       return;

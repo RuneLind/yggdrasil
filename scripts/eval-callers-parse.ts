@@ -115,3 +115,9 @@ export function declaredParamCount(minParams: number | null | undefined, maxPara
   if (minParams === null || minParams === undefined) return null;
   return maxParams ?? minParams + 1;
 }
+
+/** Same length, and equal at every position where both types are known. */
+export function paramTypesMatch(want: (string | null)[], have: (string | null)[] | null | undefined): boolean {
+  if (!have || have.length !== want.length) return false;
+  return want.every((w, i) => w === null || have[i] === null || w === have[i]);
+}
