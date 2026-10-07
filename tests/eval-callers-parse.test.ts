@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { countParams, declaredParamCount, intellijMethodName, intellijParamCount } from "../scripts/eval-callers-parse.ts";
+import { countParams, declaredParamCount, intellijMethodName, intellijParamCount, intellijParamTypes } from "../scripts/eval-callers-parse.ts";
 
 const strip = (s: string) => s.replace(/`/g, "");
 
@@ -51,5 +51,19 @@ describe("declaredParamCount", () => {
 
   test("unknown without min_params", () => {
     expect(declaredParamCount(null, null)).toBeNull();
+  });
+});
+
+describe("intellijParamTypes", () => {
+  test("simple names, generics and nullability stripped, boxed twins folded", () => {
+    expect(intellijParamTypes("Foo.bar(String, Int, Instant?)")).toEqual(["String", "int", "Instant"]);
+    expect(intellijParamTypes("landErEessiReady(String, Collection<Land_iso2>)")).toEqual(["String", "Collection"]);
+    expect(intellijParamTypes("hentPersonMedHistorikk(long)")).toEqual(["long"]);
+    expect(intellijParamTypes("f(OppgaveMigrering.Options, Map<A, B>)")).toEqual(["Options", "Map"]);
+    expect(intellijParamTypes("g()")).toEqual([]);
+  });
+
+  test("a type that is not an identifier path is unknown", () => {
+    expect(intellijParamTypes("f((String) -> Unit, int[])")).toEqual([null, null]);
   });
 });

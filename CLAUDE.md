@@ -39,7 +39,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 2. **AST parsing** — web-tree-sitter WASM, per-language grammars
 3. **Symbol extraction** — Tree-sitter Query API, extract classes/methods/functions/interfaces
 4. **Import resolution** — Java packages, Kotlin, TS relative paths → symbol references
-5. **Call graph** — Phase 1 stores call sites (`ci_call_sites`, owned by the outermost method/function/constructor containing the call inside its innermost class/interface/enum/object, else inside the next container out; `receiver_type` is the receiver variable's declared type from an AST scope walk in `src/indexer/call-graph.ts`) and inheritance refs (`ci_inheritance_refs`). Phase 2 deletes and rebuilds every `calls`/`extends`/`implements` edge in the repo from those rows in one transaction whenever a file changed or was removed, so incremental reindexes keep incoming cross-file edges. It resolves type names through member types, imports (aliases included), the same package and wildcard imports, walks `extends`/`implements` for the method, gives every arity-compatible overload (`min_params`..`max_params`) an edge, and tags each `calls` edge with `ci_edges.resolution` (`local`/`static`/`typed`). `EXTRACTOR_VERSION` in `src/indexer/index.ts` gates the index: a mismatch with `ci_repos.extractor_version` forces a full re-extract. Bump it whenever extraction output changes.
+5. **Call graph** — Phase 1 stores call sites (`ci_call_sites`, owned by the outermost method/function/constructor containing the call inside its innermost class/interface/enum/object, else inside the next container out; `receiver_type`, `arg_types`/`arg_names` and `implicit_receiver_type` come from the one-pass AST scope walk in `src/indexer/scope-walk.ts`) and inheritance refs (`ci_inheritance_refs`). Phase 2 deletes and rebuilds every `calls`/`extends`/`implements` edge in the repo from those rows in one transaction whenever a file changed or was removed, so incremental reindexes keep incoming cross-file edges. It resolves type names through member types (inherited ones included), imports (aliases included), the same package and wildcard imports, looks methods up the `extends`/`implements` hierarchy of the receiver's class (receiverless calls: the caller's class, then each enclosing class), keeps the arity-compatible (`min_params`..`max_params`), visible, non-overridden overloads, narrows them by argument types (`src/indexer/overloads.ts`), and tags each `calls` edge with `ci_edges.resolution` (`local`/`static`/`typed`). `EXTRACTOR_VERSION` in `src/indexer/index.ts` gates the index: a mismatch with `ci_repos.extractor_version` forces a full re-extract. Bump it whenever extraction output changes.
 6. **Embeddings** — at end of `indexRepo`, embed every symbol in the repo that doesn't have an embedding yet (qualified_name + signature + doc_comment, 384-dim). Idempotent; skip with `--no-embed` and backfill later via `bun run embed`. Without embeddings, semantic search is dead and any multi-word natural-language `search` query returns `[]`.
 
 ### MCP tools
@@ -132,7 +132,9 @@ src/
 │   ├── parser.ts            — tree-sitter setup + parse
 │   ├── symbol-extractor.ts  — extract symbols from AST per language
 │   ├── import-resolver.ts   — resolve imports to symbol references
-│   ├── call-graph.ts        — extract call expressions (+ receiver declared type) + inheritance
+│   ├── call-graph.ts        — per-language dispatch; inheritance clauses
+│   ├── scope-walk.ts        — one-pass scope walk: call sites with receiver/argument types
+│   ├── overloads.ts         — argument-type narrowing among overloads
 │   ├── edge-resolver.ts     — store call sites; rebuild calls + inheritance edges repo-wide
 │   └── embedder.ts          — end-of-repo batch embedding (idempotent)
 ├── search/

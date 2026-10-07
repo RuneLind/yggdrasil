@@ -1,4 +1,6 @@
 /** Pure signature parsing for eval-callers.ts, kept import-safe (no DB, no main()). */
+import { normalizeTypeName } from "../src/indexer/symbol-extractor.ts";
+import { canonicalType } from "../src/indexer/overloads.ts";
 
 const OPEN = "(<[{";
 const CLOSE = ")>]}";
@@ -75,6 +77,34 @@ export function countParams(text: string, from = 0): number | null {
 export function intellijParamCount(signature: string): number | null {
   const open = lastGroupStart(signature);
   return open >= 0 ? countParams(signature, open) : null;
+}
+
+/**
+ * Parameter types of an IntelliJ signature's final group, canonical like
+ * ci_symbols.param_types (simple name, generics and `?` stripped, boxed twins folded);
+ * null for a type that is not an identifier path (function type, array, vararg).
+ */
+export function intellijParamTypes(signature: string): (string | null)[] | null {
+  const open = lastGroupStart(signature);
+  if (open < 0) return null;
+  const inner = signature.slice(open + 1, signature.lastIndexOf(")"));
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (OPEN.includes(ch)) depth++;
+    else if (CLOSE.includes(ch) && !(ch === ">" && inner[i - 1] === "-")) depth--;
+    if (ch === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+    } else current += ch;
+  }
+  if (current.trim() !== "") parts.push(current);
+  return parts.map((p) => {
+    const normalized = normalizeTypeName(p.trim());
+    return normalized ? canonicalType(normalized) : null;
+  });
 }
 
 /**

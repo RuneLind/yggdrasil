@@ -598,10 +598,10 @@ public class RUser {
     expect(await callsFrom(repo, "st2.StaticImp.c")).toEqual(["st.Util.sf@local"]);
   });
 
-  test("an edge to every overload whose parameter range admits the argument count", async () => {
+  test("an edge to the overloads whose parameter range admits the argument count, narrowed by type", async () => {
     const lines = async (source: string) =>
       (await repo.edgesFrom(source, "calls")).map((e) => e.targetLine).sort((a, b) => a - b);
-    expect(await lines("o.Ov.one")).toEqual([4, 5]);
+    expect(await lines("o.Ov.one")).toEqual([4]);
     expect(await lines("o.Ov.two")).toEqual([6]);
     expect(await lines("o.Ov.three")).toEqual([]);
   });
@@ -621,8 +621,8 @@ public class RUser {
     expect(await callsFrom(repo, "o.KOv.kvTooFew")).toEqual([]);
   });
 
-  test("a call with a named argument has no count and reaches every overload", async () => {
-    expect((await repo.edgesFrom("o.KOv.named", "calls")).map((e) => e.targetLine).sort()).toEqual([4, 5]);
+  test("a named argument counts toward the arity", async () => {
+    expect((await repo.edgesFrom("o.KOv.named", "calls")).map((e) => e.targetLine).sort()).toEqual([4]);
   });
 
   test("an X.Companion receiver resolves to the companion's function", async () => {

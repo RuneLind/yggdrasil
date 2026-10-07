@@ -50,6 +50,8 @@ public class Ov {
     public static void f(int a, int b) {}
     public static void g(int a) {}
     public static void g(int a, int b) {}
+    public static void h(String s) {}
+    public static void h(long a) {}
 }
 `,
       [OV_USER]: `package no.nav.test;
@@ -57,6 +59,8 @@ public class Ov {
 public class OvBruker {
     void en() { Ov.f(1); Ov.g(1); }
     void to() { Ov.f(1, 2); Ov.g(1, 2); }
+    void str() { Ov.h("a"); }
+    void num() { Ov.h(1L); }
 }
 `,
     });
@@ -123,6 +127,27 @@ public class OvBruker {
 
   test("an overload whose stored signature is cut inside an annotation is told apart", async () => {
     const r = await runEval(await tempFixture(overloadFixture("f")));
+    expect(r.stdout).not.toContain("not disambiguated");
+    expect(r.stdout).toMatch(/production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
+  });
+
+  // Same arity: only the IntelliJ parameter types tell h(String) from h(long).
+  test("same-arity overloads are told apart by the fixture's parameter types", async () => {
+    const r = await runEval(
+      await tempFixture(
+        JSON.stringify({
+          repo: repo.name,
+          symbols: [
+            {
+              qualified_name: "no.nav.test.Ov.h",
+              intellij_signature: "h(String)",
+              file: OV,
+              callers: [{ signature: "OvBruker.str()", file: OV_USER }],
+            },
+          ],
+        }),
+      ),
+    );
     expect(r.stdout).not.toContain("not disambiguated");
     expect(r.stdout).toMatch(/production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
   });

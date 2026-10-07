@@ -16,6 +16,9 @@ export interface CiSymbol {
   declared_type?: string | null;
   min_params?: number | null;
   max_params?: number | null;
+  param_types?: (string | null)[] | null;
+  param_names?: (string | null)[] | null;
+  extension_receiver?: string | null;
 }
 
 export interface SymbolInsert {
@@ -33,22 +36,9 @@ export interface SymbolInsert {
   declared_type?: string | null;
   min_params?: number | null;
   max_params?: number | null;
-}
-
-export async function insertSymbol(sym: SymbolInsert): Promise<string> {
-  const [row] = await sql<{ id: string }[]>`
-    INSERT INTO ci_symbols (
-      file_id, name, qualified_name, kind, parent_id,
-      start_line, end_line, signature, doc_comment, visibility, is_static
-    ) VALUES (
-      ${sym.file_id}, ${sym.name}, ${sym.qualified_name}, ${sym.kind},
-      ${sym.parent_id ?? null}, ${sym.start_line}, ${sym.end_line},
-      ${sym.signature ?? null}, ${sym.doc_comment ?? null},
-      ${sym.visibility ?? null}, ${sym.is_static ?? false}
-    )
-    RETURNING id
-  `;
-  return row.id;
+  param_types?: (string | null)[] | null;
+  param_names?: (string | null)[] | null;
+  extension_receiver?: string | null;
 }
 
 export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<string[]> {
@@ -71,6 +61,9 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
         declared_type: s.declared_type ?? null,
         min_params: s.min_params ?? null,
         max_params: s.max_params ?? null,
+        param_types: s.param_types ?? null,
+        param_names: s.param_names ?? null,
+        extension_receiver: s.extension_receiver ?? null,
       })),
       "file_id",
       "name",
@@ -86,6 +79,9 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
       "declared_type",
       "min_params",
       "max_params",
+      "param_types",
+      "param_names",
+      "extension_receiver",
     )}
     RETURNING id
   `;

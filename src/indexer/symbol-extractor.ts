@@ -2,6 +2,7 @@ import { Query, type Language } from "web-tree-sitter";
 import type { SupportedLanguage } from "./parser.ts";
 import type { SymbolInsert } from "../db/symbols.ts";
 import { nodeText, findNamedChild } from "./ast-utils.ts";
+import { canonicalType } from "./overloads.ts";
 import type { Node as SyntaxNode } from "web-tree-sitter";
 
 export type SymbolKind = "class" | "interface" | "enum" | "method" | "function" |
@@ -66,11 +67,22 @@ export interface ExtractedSymbol {
   isStatic: boolean;
   /** For building qualified names — parent symbol index in the same extraction batch */
   parentIndex: number | null;
-  /** A property's type or a method's return type, normalized (see normalizeTypeName). */
+  /**
+   * A Kotlin property's type or a method's return type, normalized (see
+   * normalizeTypeName). Java fields are not symbols.
+   */
   declaredType: string | null;
   /** Callables only: parameters without a default; all parameters, null for a vararg. */
   minParams: number | null;
   maxParams: number | null;
+  /**
+   * Callables only, one entry per parameter: canonical simple type (see canonicalType),
+   * null for a type parameter, array, function type or vararg; and the parameter name.
+   */
+  paramTypes: (string | null)[] | null;
+  paramNames: (string | null)[] | null;
+  /** Kotlin extension function: the receiver type, normalized. */
+  extensionReceiver: string | null;
 }
 
 export interface ExtractedImport {
@@ -146,7 +158,7 @@ export function extractSymbols(
       const kind = getSymbolKind(match);
       const signature = extractSignature(source, patternNode);
       const docComment = extractDocComment(source, patternNode);
-      const visibility = extractVisibility(patternNode, lang);
+      const visibility = extractVisibility(patternNode, lang, source);
       const name = nodeText(nameNode, source);
       const shape = declarationShape(patternNode, lang, source);
 
@@ -223,10 +235,15 @@ export function normalizeTypeName(text: string | null | undefined): string | nul
 
 const KOTLIN_TYPE_NODES: ReadonlySet<string> = new Set(["user_type", "nullable_type", "function_type", "parenthesized_type", "non_nullable_type"]);
 
-/** Kotlin `val x: T` → T; `val x = Foo(…)` → Foo (an uppercase callee is a constructor call). */
+/**
+ * Kotlin `val x: T` → T; `val x = Foo(…)` → Foo (an uppercase callee is a constructor
+ * call); `val x = "…"` (or another literal) → the literal's type.
+ */
 export function kotlinVariableType(decl: SyntaxNode, value: SyntaxNode | null | undefined, source: string): string | null {
   const typeNode = decl.namedChildren.find((c: SyntaxNode) => KOTLIN_TYPE_NODES.has(c.type));
   if (typeNode) return normalizeTypeName(nodeText(typeNode, source));
+  const literal = value ? kotlinLiteralType(value, source) : null;
+  if (literal) return literal;
   if (value?.type === "call_expression") {
     const callee = value.namedChild(0);
     if (callee?.type === "identifier" && /^\p{Lu}/u.test(nodeText(callee, source))) return nodeText(callee, source);
@@ -234,35 +251,94 @@ export function kotlinVariableType(decl: SyntaxNode, value: SyntaxNode | null | 
   return null;
 }
 
-type DeclarationShape = Pick<ExtractedSymbol, "declaredType" | "minParams" | "maxParams">;
+function kotlinLiteralType(value: SyntaxNode, source: string): string | null {
+  const text = nodeText(value, source);
+  switch (value.type) {
+    case "string_literal": return "String";
+    case "character_literal": return "Char";
+    case "number_literal": return /[uU]/.test(text) && !/^0[xX]/.test(text) ? null : /[lL]$/.test(text) ? "Long" : "Int";
+    case "float_literal": return /[fF]$/.test(text) ? "Float" : "Double";
+    case "identifier": return text === "true" || text === "false" ? "Boolean" : null;
+    default: return null;
+  }
+}
+
+type DeclarationShape = Pick<
+  ExtractedSymbol,
+  "declaredType" | "minParams" | "maxParams" | "paramTypes" | "paramNames" | "extensionReceiver"
+>;
+
+/** Names of the type parameters in scope at `node`: its own and every enclosing declaration's. */
+function typeParameterNames(node: SyntaxNode, source: string): Set<string> {
+  const names = new Set<string>();
+  for (let n: SyntaxNode | null = node; n; n = n.parent) {
+    for (const tp of findNamedChild(n, "type_parameters")?.namedChildren ?? []) {
+      const id = tp?.type === "type_parameter"
+        ? tp.namedChildren.find((c) => c?.type === "identifier" || c?.type === "type_identifier")
+        : undefined;
+      if (id) names.add(nodeText(id, source));
+    }
+  }
+  return names;
+}
+
+/** A parameter's declared type → canonical simple name; null for a type parameter or a non-path type. */
+function paramType(typeNode: SyntaxNode | null | undefined, typeParams: Set<string>, source: string): string | null {
+  const normalized = typeNode ? normalizeTypeName(nodeText(typeNode, source)) : null;
+  return normalized === null || typeParams.has(normalized) ? null : canonicalType(normalized);
+}
 
 function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: string): DeclarationShape {
-  const none: DeclarationShape = { declaredType: null, minParams: null, maxParams: null };
+  const none: DeclarationShape = {
+    declaredType: null, minParams: null, maxParams: null, paramTypes: null, paramNames: null, extensionReceiver: null,
+  };
   if (lang === "java" && (node.type === "method_declaration" || node.type === "constructor_declaration")) {
+    const typeParams = typeParameterNames(node, source);
     const params = node.childForFieldName("parameters");
-    let count = 0;
+    const paramTypes: (string | null)[] = [];
+    const paramNames: (string | null)[] = [];
     let vararg = false;
     for (const p of params?.namedChildren ?? []) {
-      if (p.type === "formal_parameter") count++;
-      else if (p.type === "spread_parameter") vararg = true;
+      if (p?.type === "formal_parameter") {
+        paramTypes.push(paramType(p.childForFieldName("type"), typeParams, source));
+        paramNames.push(nodeText(p.childForFieldName("name") ?? p, source));
+      } else if (p?.type === "spread_parameter") {
+        vararg = true;
+        paramTypes.push(null);
+        const name = findNamedChild(p, "variable_declarator")?.childForFieldName("name");
+        paramNames.push(name ? nodeText(name, source) : null);
+      }
     }
+    const count = paramTypes.length - (vararg ? 1 : 0);
     const type = node.childForFieldName("type");
-    return { declaredType: type ? normalizeTypeName(nodeText(type, source)) : null, minParams: count, maxParams: vararg ? null : count };
+    return {
+      ...none,
+      declaredType: type ? normalizeTypeName(nodeText(type, source)) : null,
+      minParams: count,
+      maxParams: vararg ? null : count,
+      paramTypes,
+      paramNames,
+    };
   }
   if (lang === "kotlin" && node.type === "function_declaration") {
-    const children = node.children;
-    const paramsAt = children.findIndex((c: SyntaxNode) => c.type === "function_value_parameters");
+    const children = node.children.filter((c): c is SyntaxNode => c !== null);
+    const paramsAt = children.findIndex((c) => c.type === "function_value_parameters");
     if (paramsAt < 0) return none;
+    const typeParams = typeParameterNames(node, source);
     let min = 0;
     let max: number | null = 0;
     let varargNext = false;
-    const params = children[paramsAt].children;
+    const paramTypes: (string | null)[] = [];
+    const paramNames: (string | null)[] = [];
+    const params = children[paramsAt].children.filter((c): c is SyntaxNode => c !== null);
     for (let i = 0; i < params.length; i++) {
       const p = params[i];
       if (p.type === "parameter_modifiers") varargNext = nodeText(p, source).includes("vararg");
       if (p.type !== "parameter") continue;
       const vararg = varargNext || nodeText(p, source).startsWith("vararg");
       varargNext = false;
+      paramNames.push(nodeText(p.namedChild(0) ?? p, source));
+      paramTypes.push(vararg ? null : paramType(p.namedChildren.find((c) => c !== null && KOTLIN_TYPE_NODES.has(c.type)), typeParams, source));
       if (vararg) max = null;
       else {
         if (max !== null) max++;
@@ -270,12 +346,22 @@ function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: str
       }
     }
     const colon = children[paramsAt + 1]?.type === ":" ? children[paramsAt + 2] : undefined;
-    return { declaredType: colon ? normalizeTypeName(nodeText(colon, source)) : null, minParams: min, maxParams: max };
+    // `fun Foo.name(…)`: the receiver type is the named node before the `.` before the name.
+    const nameAt = children.findIndex((c) => c.id === node.childForFieldName("name")?.id);
+    const receiver = nameAt >= 2 && children[nameAt - 1].type === "." ? children[nameAt - 2] : undefined;
+    return {
+      declaredType: colon ? normalizeTypeName(nodeText(colon, source)) : null,
+      minParams: min,
+      maxParams: max,
+      paramTypes,
+      paramNames,
+      extensionReceiver: receiver ? normalizeTypeName(nodeText(receiver, source)) : null,
+    };
   }
   if (lang === "kotlin" && node.type === "property_declaration") {
     const decl = findNamedChild(node, "variable_declaration");
-    const eq = node.children.findIndex((c: SyntaxNode) => c.type === "=");
-    const value = eq >= 0 ? node.children.slice(eq + 1).find((c: SyntaxNode) => c.isNamed) : null;
+    const eq = node.children.findIndex((c) => c?.type === "=");
+    const value = eq >= 0 ? node.children.slice(eq + 1).find((c) => c?.isNamed) : null;
     return { ...none, declaredType: decl ? kotlinVariableType(decl, value, source) : null };
   }
   return none;
@@ -324,24 +410,16 @@ function extractDocComment(
   return null;
 }
 
-function extractVisibility(
-  node: import("web-tree-sitter").SyntaxNode,
-  lang: SupportedLanguage,
-): string | null {
-  const text = node.text ?? "";
-  if (text.startsWith("public ")) return "public";
-  if (text.startsWith("private ")) return "private";
-  if (text.startsWith("protected ")) return "protected";
-  if (lang === "kotlin" && text.startsWith("internal ")) return "internal";
-  // Kotlin: check modifiers child
+/** From the modifiers node, so an annotation before the keyword does not hide it. */
+function extractVisibility(node: SyntaxNode, lang: SupportedLanguage, source: string): string | null {
+  const modifiers = findNamedChild(node, "modifiers");
+  if (!modifiers) return null;
   if (lang === "kotlin") {
-    const modifiers = node.childForFieldName?.("modifiers") ?? findNamedChild(node, "modifiers");
-    if (modifiers) {
-      const modText = modifiers.text ?? "";
-      if (modText.includes("private")) return "private";
-      if (modText.includes("internal")) return "internal";
-      if (modText.includes("protected")) return "protected";
-    }
+    const v = findNamedChild(modifiers, "visibility_modifier");
+    return v ? nodeText(v, source).trim() : null;
+  }
+  for (const c of modifiers.children) {
+    if (c && (c.type === "public" || c.type === "private" || c.type === "protected")) return c.type;
   }
   return null;
 }
@@ -418,5 +496,8 @@ export function toSymbolInserts(
     declared_type: sym.declaredType,
     min_params: sym.minParams,
     max_params: sym.maxParams,
+    param_types: sym.paramTypes,
+    param_names: sym.paramNames,
+    extension_receiver: sym.extensionReceiver,
   }));
 }

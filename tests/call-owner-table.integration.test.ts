@@ -34,6 +34,15 @@ public class JHost {
             void m() { Sink.jLocalMethod(); }
         }
     }
+    void local2() {
+        class L1 {
+            void m() {
+                class L2 {
+                    int f = Sink.jLocal2Field();
+                }
+            }
+        }
+    }
     static class Nested {
         void m() { Sink.jNested(); }
     }
@@ -108,6 +117,7 @@ const OWNERS: [string, string, string | null][] = [
   ["Java", "jLocalMethod", "p.JHost.L.m"],
   ["Java", "jLocalField", "p.JHost.local"],
   ["Java", "jLocalInit", "p.JHost.local"],
+  ["Java", "jLocal2Field", "p.JHost.L1.m"],
   ["Java", "jNested", "p.JHost.Nested.m"],
   ["Java", "jStaticInit", null],
   ["Java", "jInstanceInit", null],

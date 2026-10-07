@@ -43,7 +43,7 @@ describe("argCount", () => {
       `fun f() { a.b(1, 2); g(1) { it }; h { }; k(x = 1); m(*arr); n() }`,
     );
     expect(cs.map((c) => [c.methodName, c.argCount])).toEqual([
-      ["b", 2], ["g", 2], ["h", 1], ["k", null], ["m", null], ["n", 0],
+      ["b", 2], ["g", 2], ["h", 1], ["k", 1], ["m", null], ["n", 0],
     ]);
   });
 

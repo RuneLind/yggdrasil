@@ -180,8 +180,8 @@ public class Dup {
 });
 
 /**
- * Overloads share a qualified name. A call's argument count cannot tell same-arity
- * overloads apart without argument types, so each of them gets an edge.
+ * Overloads share a qualified name. When no argument type is known, the argument count
+ * cannot tell same-arity overloads apart, so each of them gets an edge.
  */
 describe.skipIf(!RUN)("same-arity overloads", () => {
   let repo: FixtureRepo;
@@ -197,7 +197,7 @@ public class Ov {
 
     void same(int a) {} void same(String s) {}
 
-    void caller() { over(1); same(2); }
+    void caller(Object o) { over(o.hashCode()); same(o.hashCode()); }
 }
 `,
     });

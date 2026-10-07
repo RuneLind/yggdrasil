@@ -1,4 +1,4 @@
-import type { SyntaxNode } from "web-tree-sitter";
+import type { Node as SyntaxNode } from "web-tree-sitter";
 
 /** Get node text with fallback for WASM builds where .text can be undefined. */
 export function nodeText(node: SyntaxNode, source: string): string {

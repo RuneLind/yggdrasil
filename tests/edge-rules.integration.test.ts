@@ -43,8 +43,9 @@ describe.skipIf(!RUN)("edge rebuild rules", () => {
     expect(await targets()).toEqual([["p.B.helper", "mod2/src/main/java/p/B.java"]]);
   });
 
-  // `f(int)` precedes `f()`; the arity picks `f()`, and the caller is never its own
-  // target. `S.g()` matches p.S and q.S by name; the import picks p.S.
+  // `f(null)` admits both one-parameter overloads (null fits any parameter type), so only
+  // self-exclusion keeps the caller `f(int)` off its own edge list. `S.g()` matches p.S
+  // and q.S by name; the import picks p.S.
   test("an overload calling its sibling and an imported static call each resolve to one target", async () => {
     repo = await createFixtureRepo({
       "src/main/java/p/S.java": "package p;\n\npublic class S { public static void g() {} }\n",
@@ -55,11 +56,11 @@ import p.S;
 
 public class A {
     void f(int a) {
-        f();
+        f(null);
         S.g();
     }
 
-    void f() {}
+    void f(String s) {}
 }
 `,
     });
@@ -67,6 +68,18 @@ public class A {
     expect(edges.map((e) => [e.sourceLine, e.target, e.targetLine])).toEqual([
       [6, "p.S.g", 3],
       [6, "r.A.f", 11],
+    ]);
+  });
+
+  // Same-rank owners: the same package declares `helper` in two files (two Gradle
+  // modules); the caller's own file wins.
+  test("a receiverless call prefers the same-package function in the caller's file", async () => {
+    repo = await createFixtureRepo({
+      "mod1/src/main/kotlin/t/Helpers.kt": "package t\n\nfun helper() = 1\n",
+      "mod2/src/main/kotlin/t/Caller.kt": "package t\n\nfun helper() = 2\n\nclass Caller {\n    fun c() { helper() }\n}\n",
+    });
+    expect((await repo.edgesFrom("t.Caller.c", "calls")).map((e) => e.targetPath)).toEqual([
+      "mod2/src/main/kotlin/t/Caller.kt",
     ]);
   });
 
@@ -81,5 +94,14 @@ public class T {
 `,
     });
     expect((await repo.edgesFrom("p.T.a", "calls")).map((e) => e.target)).toEqual(["p.T.b"]);
+  });
+
+  // Two call sites on one line reach the same target: one edge, labeled with the
+  // strongest resolution (typed > static > local).
+  test("one edge per line and target keeps the strongest resolution", async () => {
+    repo = await createFixtureRepo({
+      "src/main/kotlin/p/A.kt": "package p\n\nclass A {\n    fun g() = 1\n    fun f(a: A) { g(); a.g() }\n}\n",
+    });
+    expect((await repo.edgesFrom("p.A.f", "calls")).map((e) => `${e.target}@${e.resolution}`)).toEqual(["p.A.g@typed"]);
   });
 });

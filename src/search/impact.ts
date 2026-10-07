@@ -25,7 +25,7 @@ export interface ImpactEntry {
   repo_name: string;
   depth: number;
   edge_kind: string;
-  /** How the edge that reached this entry was resolved; null for extends/implements. */
+  /** How the edge that reached this entry was resolved; null for extends/implements/imports. */
   resolution: EdgeResolution | null;
   confidence: number;
   archetype: Archetype;

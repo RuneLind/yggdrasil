@@ -57,9 +57,20 @@ export async function markFileIndexed(
   `;
 }
 
-/** Phase 2 resolves same-package type names and functions against this. */
-export async function setFilePackage(fileId: string, packageName: string | null): Promise<void> {
-  await sql`UPDATE ci_files SET package_name = ${packageName} WHERE id = ${fileId}`;
+/**
+ * Store the package of every changed file in one statement per 1,000 files; Phase 2
+ * resolves same-package type names and functions against it.
+ */
+export async function setFilePackages(rows: { fileId: string; packageName: string | null }[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += 1000) {
+    const chunk = rows.slice(i, i + 1000);
+    await sql`
+      UPDATE ci_files f SET package_name = v.package_name
+      FROM (SELECT unnest(${sql.array(chunk.map((r) => r.fileId))}::uuid[]) AS id,
+                   unnest(${sql.array(chunk.map((r) => r.packageName))}::text[]) AS package_name) v
+      WHERE f.id = v.id
+    `;
+  }
 }
 
 export async function deleteFileData(fileId: string): Promise<void> {
