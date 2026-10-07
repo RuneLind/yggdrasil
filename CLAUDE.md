@@ -39,7 +39,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 2. **AST parsing** — web-tree-sitter WASM, per-language grammars
 3. **Symbol extraction** — Tree-sitter Query API, extract classes/methods/functions/interfaces
 4. **Import resolution** — Java packages, Kotlin, TS relative paths → symbol references
-5. **Call graph** — extract call expressions, resolve to target symbols, create edges
+5. **Call graph** — Phase 1 stores call sites (`ci_call_sites`, owned by the outermost method/function/constructor containing the call inside its innermost class/interface/enum/object) and inheritance refs (`ci_inheritance_refs`). Phase 2 deletes and rebuilds every `calls`/`extends`/`implements` edge in the repo from those rows in one transaction whenever a file changed or was removed, so incremental reindexes keep incoming cross-file edges. `EXTRACTOR_VERSION` in `src/indexer/index.ts` gates the index: a mismatch with `ci_repos.extractor_version` forces a full re-extract. Bump it whenever extraction output changes.
 6. **Embeddings** — at end of `indexRepo`, embed every symbol in the repo that doesn't have an embedding yet (qualified_name + signature + doc_comment, 384-dim). Idempotent; skip with `--no-embed` and backfill later via `bun run embed`. Without embeddings, semantic search is dead and any multi-word natural-language `search` query returns `[]`.
 
 ### MCP tools
@@ -105,7 +105,7 @@ Uses the same PostgreSQL instance as Muninn (or standalone).
 
 - URL: configured via `DATABASE_URL` in `.env`
 - Schema: `db/migrations/` (numbered .sql files)
-- Tables: `ci_repos`, `ci_files`, `ci_symbols`, `ci_edges`, `ci_import_map`
+- Tables: `ci_repos`, `ci_files`, `ci_symbols`, `ci_edges`, `ci_import_map`, `ci_call_sites`, `ci_inheritance_refs`
 
 ## Configuration
 
@@ -132,8 +132,8 @@ src/
 │   ├── parser.ts            — tree-sitter setup + parse
 │   ├── symbol-extractor.ts  — extract symbols from AST per language
 │   ├── import-resolver.ts   — resolve imports to symbol references
-│   ├── call-graph.ts        — extract call expressions → edges
-│   ├── edge-resolver.ts     — resolve calls + inheritance → ci_edges
+│   ├── call-graph.ts        — extract call expressions + inheritance
+│   ├── edge-resolver.ts     — store call sites; rebuild calls + inheritance edges repo-wide
 │   └── embedder.ts          — end-of-repo batch embedding (idempotent)
 ├── search/
 │   ├── hybrid-search.ts     — RRF over FTS + semantic + name match

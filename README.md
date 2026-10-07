@@ -52,14 +52,15 @@ flowchart TD
         E --> F[Extract symbols]
         F --> G[Store in ci_symbols]
         F --> H[Store imports in ci_import_map]
+        E --> J[Extract call expressions + inheritance]
+        J --> P[Store in ci_call_sites + ci_inheritance_refs]
     end
 
-    subgraph "Phase 2: Edges"
+    subgraph "Phase 2: Edges (whole repo)"
         G --> I[Resolve imports → edges]
         H --> I
-        E --> J[Extract call expressions]
-        J --> K[Resolve inheritance]
-        K --> L[Resolve method calls]
+        P --> K[Rebuild inheritance edges]
+        K --> L[Rebuild call edges]
         I --> M[Store in ci_edges]
         L --> M
     end
@@ -77,6 +78,10 @@ erDiagram
     ci_repos ||--o{ ci_files : contains
     ci_files ||--o{ ci_symbols : defines
     ci_files ||--o{ ci_import_map : imports
+    ci_files ||--o{ ci_call_sites : contains
+    ci_files ||--o{ ci_inheritance_refs : contains
+    ci_symbols ||--o{ ci_call_sites : calls_from
+    ci_symbols ||--o{ ci_inheritance_refs : declares
     ci_symbols ||--o{ ci_symbols : parent
     ci_symbols ||--o{ ci_edges : source
     ci_symbols ||--o{ ci_edges : target
@@ -86,6 +91,7 @@ erDiagram
         text name UK
         text path
         text last_commit
+        int extractor_version
         timestamptz indexed_at
     }
 
@@ -118,7 +124,30 @@ erDiagram
         text kind
         int line
     }
+
+    ci_call_sites {
+        uuid id PK
+        uuid file_id FK
+        uuid source_symbol_id FK
+        text receiver
+        text receiver_kind
+        text method_name
+        int arg_count
+        int line
+    }
+
+    ci_inheritance_refs {
+        uuid id PK
+        uuid file_id FK
+        uuid source_symbol_id FK
+        text kind
+        text type_name
+    }
 ```
+
+Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones. A call site belongs to the outermost method, function or constructor whose source range contains it and that lies inside the innermost class, interface, enum or object containing the call. Calls inside an anonymous class, object expression or local function count for the host; calls inside a local named class count for that class's methods.
+
+When `ci_repos.extractor_version` differs from `EXTRACTOR_VERSION` in `src/indexer/index.ts`, a plain `bun run index` re-extracts every file, as with `--full`. Bump the constant whenever extraction output changes. The re-extract drops every embedding of the repo, so with `--no-embed` semantic search stays dead until you run `bun run embed`.
 
 ### MCP tools
 
@@ -358,8 +387,8 @@ src/
 │   ├── symbol-extractor.ts   AST → symbols per language
 │   ├── ast-utils.ts          Shared AST helpers
 │   ├── import-resolver.ts    Resolve imports → edges
-│   ├── call-graph.ts         Extract calls + inheritance
-│   └── edge-resolver.ts      Resolve calls → symbol IDs
+│   ├── call-graph.ts         Extract calls (receiver kind, arg count) + inheritance
+│   └── edge-resolver.ts      Store call sites; rebuild call/inheritance edges repo-wide
 ├── search/
 │   ├── hybrid-search.ts      RRF over FTS + semantic + name
 │   ├── impact.ts             Blast radius (recursive CTE) + archetype tagging

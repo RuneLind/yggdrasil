@@ -4,10 +4,38 @@ import { CONTAINER_KINDS } from "./symbol-extractor.ts";
 import { nodeText, walkTree, findNamedChild } from "./ast-utils.ts";
 import type { SyntaxNode } from "web-tree-sitter";
 
+export type ReceiverKind = "none" | "this" | "identifier" | "static-type" | "chain-or-expression";
+
 export interface ExtractedCall {
   receiver: string | null;
+  receiverKind: ReceiverKind;
   methodName: string;
+  /** Includes a Kotlin trailing lambda; null when a spread or named argument makes the count unreliable. */
+  argCount: number | null;
   line: number;
+  /** Call node's start offset, same units as ExtractedSymbol.startIndex. */
+  startIndex: number;
+}
+
+// Continuation allows combining marks, so an NFD-encoded Å (A + U+030A) stays one identifier.
+const IDENT_PATH_SEGMENT = /^[\p{L}_$][\p{L}\p{M}\p{N}\p{Pc}\p{Sc}]*$/u;
+
+/**
+ * Classify a receiver as extracted. `static-type` is an identifier path starting with an
+ * uppercase letter (\p{Lu}, so Æ/Ø/Å count): it covers every receiver the static-call
+ * rule can resolve, because that rule matches the receiver against a container's
+ * qualified name, which is always an identifier path.
+ */
+export function classifyReceiver(receiver: string | null): ReceiverKind {
+  if (receiver === null) return "none";
+  if (receiver === "this") return "this";
+  const segments = receiver.split(".");
+  const isPath = segments.every(
+    (seg) => IDENT_PATH_SEGMENT.test(seg) && seg !== "this" && seg !== "super",
+  );
+  if (!isPath) return "chain-or-expression";
+  if (/^\p{Lu}/u.test(receiver)) return "static-type";
+  return segments.length === 1 ? "identifier" : "chain-or-expression";
 }
 
 export interface ExtractedInheritance {
@@ -85,10 +113,15 @@ function extractJavaCalls(root: SyntaxNode, source: string, calls: ExtractedCall
     const objectNode = node.childForFieldName("object");
     if (!nameNode) return;
 
+    const receiver = objectNode ? nodeText(objectNode, source) : null;
+    const args = node.childForFieldName("arguments");
     calls.push({
-      receiver: objectNode ? nodeText(objectNode, source) : null,
+      receiver,
+      receiverKind: classifyReceiver(receiver),
       methodName: nodeText(nameNode, source),
+      argCount: args ? args.namedChildren.filter((c: SyntaxNode) => !isComment(c)).length : 0,
       line: node.startPosition.row + 1,
+      startIndex: node.startIndex,
     });
   });
 }
@@ -166,20 +199,61 @@ function extractKotlinCalls(root: SyntaxNode, source: string, calls: ExtractedCa
     if (firstChild.type === "navigation_expression") {
       const parts = firstChild.namedChildren;
       if (parts.length >= 2) {
+        const receiver = nodeText(parts[0], source);
         calls.push({
-          receiver: nodeText(parts[0], source),
+          receiver,
+          receiverKind: classifyReceiver(receiver),
           methodName: nodeText(parts[parts.length - 1], source),
+          argCount: kotlinArgCount(node),
           line: node.startPosition.row + 1,
+          startIndex: node.startIndex,
         });
       }
     } else if (firstChild.type === "identifier") {
       calls.push({
         receiver: null,
+        receiverKind: "none",
         methodName: nodeText(firstChild, source),
+        argCount: kotlinArgCount(node),
         line: node.startPosition.row + 1,
+        startIndex: node.startIndex,
       });
     }
   });
+}
+
+function isComment(node: SyntaxNode): boolean {
+  return node.type === "line_comment" || node.type === "block_comment";
+}
+
+/**
+ * Count a Kotlin call's arguments. The grammar parses `f(1) { … }` as an outer
+ * call_expression wrapping `f(1)` with the annotated_lambda as its suffix, so the
+ * trailing lambda is found on the parent; `f { … }` carries it directly.
+ */
+function kotlinArgCount(call: SyntaxNode): number | null {
+  let count = 0;
+  for (const child of call.namedChildren) {
+    if (child.type === "annotated_lambda") count++;
+    if (child.type !== "value_arguments") continue;
+    for (const arg of child.namedChildren) {
+      if (arg.type !== "value_argument") continue;
+      const named = arg.children.some((c: SyntaxNode) => c.type === "=");
+      const spread = arg.namedChildren.some((c: SyntaxNode) => c.type === "spread_expression");
+      if (named || spread) return null;
+      count++;
+    }
+  }
+  const parent = call.parent;
+  if (
+    parent?.type === "call_expression" &&
+    parent.namedChild(0)?.id === call.id &&
+    parent.namedChildren.length === 2 &&
+    parent.namedChild(1)?.type === "annotated_lambda"
+  ) {
+    count++;
+  }
+  return count;
 }
 
 function extractKotlinInheritance(

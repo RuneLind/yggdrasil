@@ -55,6 +55,9 @@ export interface ExtractedSymbol {
   kind: string;
   startLine: number;
   endLine: number;
+  /** Declaration node's start/end offsets in the parsed source; call-site ownership compares them. */
+  startIndex: number;
+  endIndex: number;
   signature: string | null;
   docComment: string | null;
   visibility: string | null;
@@ -140,6 +143,8 @@ export function extractSymbols(
         kind,
         startLine: patternNode.startPosition.row + 1,
         endLine: patternNode.endPosition.row + 1,
+        startIndex: patternNode.startIndex,
+        endIndex: patternNode.endIndex,
         signature,
         docComment,
         visibility,

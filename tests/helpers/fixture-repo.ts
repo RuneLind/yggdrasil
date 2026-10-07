@@ -26,12 +26,17 @@ export interface FixtureEdge {
   target: string;
   kind: string;
   line: number | null;
+  sourceLine: number;
+  targetLine: number;
+  targetPath: string;
 }
 
 export interface FixtureRepo {
   name: string;
   path: string;
   index: IndexResult;
+  /** Overwrite or add `files`, delete `remove`, then run an incremental `indexRepo`. */
+  reindex(files?: Record<string, string>, remove?: string[]): Promise<IndexResult>;
   /** All edges whose source and target both live in this repo, by qualified name. */
   edges(kind?: string): Promise<FixtureEdge[]>;
   /** Incoming edges to `targetQualifiedName`, optionally filtered by kind. */
@@ -58,22 +63,28 @@ export async function createFixtureRepo(
     }
   };
 
-  try {
-    for (const [rel, content] of Object.entries(files)) {
+  const writeFiles = async (toWrite: Record<string, string>) => {
+    for (const [rel, content] of Object.entries(toWrite)) {
       const abs = join(path, rel);
       await mkdir(dirname(abs), { recursive: true });
       await writeFile(abs, content);
     }
-    // exclude: [] — the default excludes nothing a fixture uses, but an explicit empty
-    // list keeps `src/test/...` fixture paths from ever being filtered.
-    const index = await indexRepo({ name, path, languages, exclude: [] }, { skipEmbeddings: true });
+  };
+  // exclude: [] — the default excludes nothing a fixture uses, but an explicit empty
+  // list keeps `src/test/...` fixture paths from ever being filtered.
+  const runIndex = () => indexRepo({ name, path, languages, exclude: [] }, { skipEmbeddings: true });
+
+  try {
+    await writeFiles(files);
+    const index = await runIndex();
 
     const edges = async (filter: { kind?: string; source?: string; target?: string } = {}) => {
       const kindFilter = filter.kind ? sql`AND e.kind = ${filter.kind}` : sql``;
       const sourceFilter = filter.source ? sql`AND src.qualified_name = ${filter.source}` : sql``;
       const targetFilter = filter.target ? sql`AND tgt.qualified_name = ${filter.target}` : sql``;
       return sql<FixtureEdge[]>`
-        SELECT src.qualified_name AS source, tgt.qualified_name AS target, e.kind, e.line
+        SELECT src.qualified_name AS source, tgt.qualified_name AS target, e.kind, e.line,
+          src.start_line AS "sourceLine", tgt.start_line AS "targetLine", tf.path AS "targetPath"
         FROM ci_edges e
         JOIN ci_symbols src ON src.id = e.source_id
         JOIN ci_files sf ON sf.id = src.file_id
@@ -90,6 +101,11 @@ export async function createFixtureRepo(
       name,
       path,
       index,
+      reindex: async (changed = {}, remove = []) => {
+        await writeFiles(changed);
+        for (const rel of remove) await rm(join(path, rel));
+        return runIndex();
+      },
       edges: (kind) => edges({ kind }),
       edgesTo: (target, kind) => edges({ target, kind }),
       edgesFrom: (source, kind) => edges({ source, kind }),

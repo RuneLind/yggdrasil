@@ -3,14 +3,38 @@ import { initParser, loadLanguage, parseSource, type SupportedLanguage } from ".
 import { extractSymbols, buildQualifiedNames, toSymbolInserts, buildParentLinks } from "./symbol-extractor.ts";
 import { extractCallGraph } from "./call-graph.ts";
 import { storeImports, resolveImports, deleteImportEdges } from "./import-resolver.ts";
-import { resolveAndStoreEdges } from "./edge-resolver.ts";
+import { storeCallGraph, rebuildEdges } from "./edge-resolver.ts";
 import { embedSymbols } from "./embedder.ts";
 import { warmupEmbeddings } from "../embeddings.ts";
-import { upsertRepo, updateRepoCommit } from "../db/repos.ts";
+import { upsertRepo, updateRepoCommit, updateRepoExtractorVersion } from "../db/repos.ts";
 import { ensureFile, markFileIndexed, deleteFileData, deleteStaleFiles } from "../db/files.ts";
 import { insertSymbolsBatch, updateSymbolParents, getRepoSymbolCount } from "../db/symbols.ts";
 import { sql } from "../db/connection.ts";
 import type { RepoConfig } from "../config.ts";
+
+/**
+ * Version of what extraction stores per file; bump it when that output changes, and a
+ * differing ci_repos.extractor_version re-extracts every file (content hashes alone don't).
+ * The check is equality only: an older binary on a DB stamped with its version skips call sites.
+ */
+export const EXTRACTOR_VERSION = 2;
+
+/**
+ * Whether a repo's stored extractor version forces a full re-extract. NULL (never gated)
+ * is stale; `undefined` means the column is missing, and the stale path would delete
+ * every file before failing on the missing ci_call_sites table, so it throws instead.
+ */
+export function isExtractorVersionStale(
+  stored: number | null | undefined,
+  current: number = EXTRACTOR_VERSION,
+): boolean {
+  if (stored === undefined) {
+    throw new Error(
+      "ci_repos.extractor_version is missing: the database schema is out of date. Run `bun run db:migrate` and index again.",
+    );
+  }
+  return stored !== current;
+}
 
 export interface IndexResult {
   repoName: string;
@@ -53,9 +77,28 @@ export async function indexRepo(
 
   const repo = await upsertRepo(config.name, config.path);
 
-  if (options.full) {
-    const deleted = await sql`DELETE FROM ci_files WHERE repo_id = ${repo.id}`;
-    console.log(`[yggdrasil] Dropped ${deleted.count} existing files (cascades to symbols + edges)`);
+  const versionStale = isExtractorVersionStale(repo.extractor_version);
+
+  if (options.full || versionStale) {
+    const [{ count: existingFiles }] = await sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM ci_files WHERE repo_id = ${repo.id}`;
+    if (existingFiles > 0) {
+      if (versionStale && !options.full) {
+        console.log(
+          `[yggdrasil] Extractor version ${repo.extractor_version ?? "none"} → ${EXTRACTOR_VERSION}: re-extracting all files`,
+        );
+      }
+      if (options.skipEmbeddings) {
+        console.warn(
+          `[yggdrasil] WARNING: re-extracting drops every embedding of ${config.name}, and --no-embed skips regenerating them: semantic search stays dead until you run \`bun run embed\`.`,
+        );
+      }
+      const deleteStart = performance.now();
+      const deleted = await sql`DELETE FROM ci_files WHERE repo_id = ${repo.id}`;
+      console.log(
+        `[yggdrasil] Dropped ${deleted.count} existing files (cascades to symbols + edges) in ${Math.round(performance.now() - deleteStart)}ms`,
+      );
+    }
   }
 
   // Pre-load languages into a Map for sync lookup in the file loop
@@ -78,15 +121,6 @@ export async function indexRepo(
 
   // ── Phase 1: Extract symbols and imports ──
   let changedFiles = 0;
-
-  // Collect per-file extraction data for Phase 2 edge resolution
-  const fileExtractions: {
-    fileId: string;
-    extraction: ReturnType<typeof extractSymbols>;
-    callGraph: ReturnType<typeof extractCallGraph>;
-    symbolDbIds: string[];
-    qualifiedNames: string[];
-  }[] = [];
 
   // Files whose content_hash is written only after Phase 2, so an interrupted run
   // re-processes them instead of skipping them as symbol-less (see ensureFile).
@@ -136,16 +170,9 @@ export async function indexRepo(
         await storeImports(fileId, extraction.imports);
       }
 
-      // Extract call graph (calls + inheritance)
+      // Store call sites + inheritance refs; Phase 2 resolves them repo-wide.
       const callGraph = extractCallGraph(source, tree, file.language, extraction);
-
-      fileExtractions.push({
-        fileId,
-        extraction,
-        callGraph,
-        symbolDbIds,
-        qualifiedNames,
-      });
+      await storeCallGraph(fileId, extraction.symbols, callGraph, symbolDbIds);
     } finally {
       tree.delete();
     }
@@ -154,7 +181,7 @@ export async function indexRepo(
   // ── Phase 2: Resolve edges (imports, calls, inheritance) ──
   let totalEdges = 0;
 
-  if (changedFiles > 0) {
+  if (changedFiles > 0 || staleCount > 0) {
     // Delete old import edges and re-resolve
     await deleteImportEdges(repo.id);
     const importEdges = await resolveImports(repo.id);
@@ -163,22 +190,17 @@ export async function indexRepo(
       console.log(`[yggdrasil] Resolved ${importEdges} import edges`);
     }
 
-    // Resolve calls and inheritance per file
-    for (const fe of fileExtractions) {
-      if (fe.callGraph.calls.length === 0 && fe.callGraph.inheritance.length === 0) continue;
-      const edgeCount = await resolveAndStoreEdges(
-        fe.fileId,
-        repo.id,
-        fe.extraction,
-        fe.callGraph,
-        fe.symbolDbIds,
-        fe.qualifiedNames,
-      );
-      totalEdges += edgeCount;
-    }
+    // Rebuild every calls/extends/implements edge in the repo from the stored rows:
+    // edges from unchanged files into a changed file cascaded away with its symbols.
+    const rebuildStart = performance.now();
+    const rebuilt = await rebuildEdges(repo.id);
+    totalEdges += rebuilt.inheritanceEdges + rebuilt.callEdges;
+    console.log(
+      `[yggdrasil] Rebuilt ${rebuilt.inheritanceEdges} inheritance + ${rebuilt.callEdges} call edges (whole repo) in ${Math.round(performance.now() - rebuildStart)}ms`,
+    );
 
     if (totalEdges > 0) {
-      console.log(`[yggdrasil] Created ${totalEdges} total edges`);
+      console.log(`[yggdrasil] Created ${totalEdges} total edges (whole repo)`);
     }
   }
 
@@ -190,6 +212,11 @@ export async function indexRepo(
   // other marks committing detached after indexRepo has already thrown.
   for (const mark of pendingHashMarks) {
     await markFileIndexed(mark.fileId, mark.language, mark.contentHash);
+  }
+  // Written before embedding: embeddings are idempotent, and a failed embed must not
+  // force the next run to re-extract (and re-embed) everything again.
+  if (versionStale) {
+    await updateRepoExtractorVersion(repo.id, EXTRACTOR_VERSION);
   }
 
   // ── Phase 3: Embed any symbols that don't have an embedding yet ──
@@ -216,7 +243,7 @@ export async function indexRepo(
   const durationMs = Math.round(performance.now() - start);
 
   console.log(
-    `[yggdrasil] Indexed ${config.name}: ${changedFiles}/${files.length} files changed, ${totalSymbols} symbols, ${totalEdges} edges, ${durationMs}ms`,
+    `[yggdrasil] Indexed ${config.name}: ${changedFiles}/${files.length} files changed, ${totalSymbols} symbols, ${totalEdges} edges rebuilt (whole repo), ${durationMs}ms`,
   );
 
   return {
