@@ -8,7 +8,8 @@
 ALTER TABLE ci_repos ADD COLUMN extractor_version INT;
 
 -- One row per call expression, owned by the outermost method, function or constructor
--- containing it. Call sites outside one are not stored.
+-- containing it inside its innermost class (see outermostCallableIndex). Call sites
+-- outside one are not stored.
 CREATE TABLE ci_call_sites (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   file_id          UUID NOT NULL REFERENCES ci_files(id) ON DELETE CASCADE,

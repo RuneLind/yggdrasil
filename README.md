@@ -145,7 +145,7 @@ erDiagram
     }
 ```
 
-Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones. A call site belongs to the outermost method, function or constructor whose source range contains it, so calls inside an anonymous class, object expression or local function count for the host.
+Phase 2 runs whenever a file changed or was removed. It deletes every `calls`, `extends` and `implements` edge in the repo and rebuilds them from `ci_call_sites` and `ci_inheritance_refs` in one transaction, so an incremental reindex keeps edges from unchanged files into changed ones. A call site belongs to the outermost method, function or constructor whose source range contains it and that lies inside the innermost class, interface, enum or object containing the call. Calls inside an anonymous class, object expression or local function count for the host; calls inside a local named class count for that class's methods.
 
 When `ci_repos.extractor_version` differs from `EXTRACTOR_VERSION` in `src/indexer/index.ts`, a plain `bun run index` re-extracts every file, as with `--full`. Bump the constant whenever extraction output changes. The re-extract drops every embedding of the repo, so with `--no-embed` semantic search stays dead until you run `bun run embed`.
 
