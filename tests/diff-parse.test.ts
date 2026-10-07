@@ -153,6 +153,29 @@ deleted file mode 100644
     expect(filesObject(diff)).toEqual({ "src/q.sql": [2] });
   });
 
+  test("C-quoted non-ASCII path → decoded as UTF-8 (G8)", () => {
+    // git's default core.quotePath quotes Å as its UTF-8 bytes in octal (\303\205).
+    // Decoding each escape to its own char would yield "Ã\x85rsavregning" instead.
+    const diff = String.raw`diff --git "a/src/no/\303\205rsavregning.kt" "b/src/no/\303\205rsavregning.kt"
+index 1234567..89abcde 100644
+--- "a/src/no/\303\205rsavregning.kt"
++++ "b/src/no/\303\205rsavregning.kt"
+@@ -3 +3 @@
+-    fun old() = 1
++    fun lagNy() = 1`;
+    expect(filesObject(diff)).toEqual({ "src/no/Årsavregning.kt": [3] });
+  });
+
+  test("C-quoted path with \\\" \\\\ \\t escapes → unescaped", () => {
+    const diff = String.raw`diff --git "a/x/q\"b\\c\td.kt" "b/x/q\"b\\c\td.kt"
+--- "a/x/q\"b\\c\td.kt"
++++ "b/x/q\"b\\c\td.kt"
+@@ -1 +1 @@
+-a
++b`;
+    expect(filesObject(diff)).toEqual({ 'x/q"b\\c\td.kt': [1] });
+  });
+
   test("empty diff → no files", () => {
     expect(filesObject("")).toEqual({});
   });
