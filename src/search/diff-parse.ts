@@ -7,9 +7,25 @@
  * indexed symbols' [start_line, end_line] to find which symbols a change hit.
  */
 
+/**
+ * Inclusive line span. `end < start` is the empty span between lines `end` and `start`:
+ * an insertion point. rangeHits then requires a symbol to contain both neighbouring
+ * lines, so code inserted just after a method's closing brace does not flag that
+ * method, but code inserted inside its body does.
+ */
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
 export interface DiffSummary {
-  /** path → set of touched line numbers (new-side for edits/adds, old-side for pure deletions) */
+  /** Head side: new path → touched new-side lines (old-side for pure deletions). */
   files: Map<string, Set<number>>;
+  /**
+   * Base side (review mode): old path → one old-side range per hunk. Added files
+   * (`--- /dev/null`) are absent, since an index of the base holds no symbols for them.
+   */
+  baseFiles: Map<string, LineRange[]>;
   addedLines: number;
   removedLines: number;
 }
@@ -84,10 +100,12 @@ function headerPath(raw: string): string {
  */
 export function parseGitDiff(text: string): DiffSummary {
   const files = new Map<string, Set<number>>();
+  const baseFiles = new Map<string, LineRange[]>();
   let addedLines = 0;
   let removedLines = 0;
 
   let currentFile: string | null = null;
+  let currentOldFile: string | null = null;
   let pendingOldFile: string | null = null;
   let inHeader = false;
 
@@ -95,6 +113,7 @@ export function parseGitDiff(text: string): DiffSummary {
     if (line.startsWith("diff --git ")) {
       inHeader = true;
       currentFile = null;
+      currentOldFile = null;
       pendingOldFile = null;
       continue;
     }
@@ -109,6 +128,8 @@ export function parseGitDiff(text: string): DiffSummary {
       // New-side path. "/dev/null" means a deleted file — fall back to the old path.
       currentFile = line.startsWith("+++ /dev/null") ? pendingOldFile : headerPath(line.slice(4));
       if (currentFile && !files.has(currentFile)) files.set(currentFile, new Set());
+      currentOldFile = pendingOldFile;
+      if (currentOldFile && !baseFiles.has(currentOldFile)) baseFiles.set(currentOldFile, []);
       inHeader = false;
       continue;
     }
@@ -131,8 +152,19 @@ export function parseGitDiff(text: string): DiffSummary {
         // Deletion-only hunk: no new-side lines, so flag the old-side region.
         for (let i = removedStart; i < removedStart + removed; i++) lines.add(i);
       }
+
+      if (currentOldFile) {
+        // git writes an empty old side as `-N,0`: zero lines *after* line N.
+        const start = removed === 0 ? removedStart + 1 : removedStart;
+        baseFiles.get(currentOldFile)!.push({ start, end: start + removed - 1 });
+      }
     }
   }
 
-  return { files, addedLines, removedLines };
+  return { files, baseFiles, addedLines, removedLines };
+}
+
+/** Does `range` touch a symbol spanning [start_line, end_line]? See LineRange for empty ranges. */
+export function rangeHits(range: LineRange, sym: { start_line: number; end_line: number }): boolean {
+  return sym.start_line <= range.end && sym.end_line >= range.start;
 }

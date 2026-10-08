@@ -270,15 +270,23 @@ export type TraceDetectChangesTiming = "diff" | "symbolResolution" | "impact";
 export interface TraceDetectChangesV1 {
   schemaVersion: 1;
   tool: "detect_changes";
-  query: { repo: string; ref?: string };
+  /** side: which diff side's hunk lines were intersected ("base" = review mode). */
+  query: { repo: string; ref?: string; side?: "base" | "head" };
+  /** Resolved commits; head is null when the diff's head is the working tree. */
+  refs?: { base: string; head: string | null };
+  warnings?: string[];
   diff: { fileCount: number; addedLines: number; removedLines: number };
   symbolsExtracted: Array<{ file: string; symbolCount: number }>;
+  /** Containers dropped from the changed set because a member of theirs changed. */
+  droppedContainers?: string[];
   impactExpansion: Array<{
     symbolId: string;
     qualifiedName: string;
     affectedCount: number;
   }>;
   totals: { changedSymbols: number; affected: number };
+  /** Affected symbols per edge_kind of the edge that reached them. */
+  affectedByEdgeKind?: Record<string, number>;
   timingsMs: Partial<Record<TraceDetectChangesTiming, number>> & { total: number };
 }
 
@@ -288,10 +296,31 @@ export class DetectChangesTracer extends BaseTracer<TraceDetectChangesTiming> {
   private readonly symbolsExtracted: TraceDetectChangesV1["symbolsExtracted"] = [];
   private readonly impactExpansion: TraceDetectChangesV1["impactExpansion"] = [];
   private totals: TraceDetectChangesV1["totals"] = { changedSymbols: 0, affected: 0 };
+  private refs: TraceDetectChangesV1["refs"];
+  private readonly warnings: string[] = [];
+  private readonly droppedContainers: string[] = [];
+  private readonly affectedByEdgeKind: Record<string, number> = {};
 
-  setQuery(repo: string, ref?: string): void {
+  setQuery(repo: string, ref?: string, side?: "base" | "head"): void {
     this.query = { repo };
     if (ref !== undefined) this.query.ref = ref;
+    if (side !== undefined) this.query.side = side;
+  }
+
+  setRefs(base: string, head: string | null): void {
+    this.refs = { base, head };
+  }
+
+  recordWarning(warning: string): void {
+    this.warnings.push(warning);
+  }
+
+  recordDroppedContainer(qualifiedName: string): void {
+    this.droppedContainers.push(qualifiedName);
+  }
+
+  countAffectedEdgeKind(edgeKind: string): void {
+    this.affectedByEdgeKind[edgeKind] = (this.affectedByEdgeKind[edgeKind] ?? 0) + 1;
   }
 
   setDiff(fileCount: number, addedLines: number, removedLines: number): void {
@@ -315,10 +344,14 @@ export class DetectChangesTracer extends BaseTracer<TraceDetectChangesTiming> {
       schemaVersion: TRACE_SCHEMA_VERSION,
       tool: "detect_changes",
       query: { ...this.query },
+      ...(this.refs ? { refs: { ...this.refs } } : {}),
+      warnings: [...this.warnings],
       diff: { ...this.diff },
       symbolsExtracted: this.symbolsExtracted.map((s) => ({ ...s })),
+      droppedContainers: [...this.droppedContainers],
       impactExpansion: this.impactExpansion.map((i) => ({ ...i })),
       totals: { ...this.totals },
+      affectedByEdgeKind: { ...this.affectedByEdgeKind },
       timingsMs: this.buildTimings(),
     };
   }

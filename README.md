@@ -176,13 +176,35 @@ The server exposes 10 tools over streamable HTTP on port 9130:
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg attaches a trace pointer URL — see [Tracing](#tracing). | "Find code related to payment processing" |
 | `symbol_context` | 360-degree view of a symbol: callers, callees, inheritance | "What calls this method? What does it extend?" |
 | `impact` | Blast radius — what breaks if this symbol changes? Each result is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/…) so an agent can filter the noise with `archetype_exclude`, and carries the `resolution` (`local`/`static`/`typed`, `null` for extends/implements/imports) of the edge that reached it. Optional `trace` arg. | "If I change Behandling, what's affected? (excluding tests and controllers)" |
-| `detect_changes` | Map a git diff to affected symbols + their blast radius (inherits archetype tagging). Optional `trace` arg. | "What's the impact of this PR?" |
+| `detect_changes` | Map a git diff to changed symbols and the callers of each (archetype, `edge_kind` and `resolution` per entry; calls/overrides sort above imports). See [detect_changes](#detect_changes). Optional `trace` arg. | "Who calls what this PR changes?" |
 | `analyze_ticket` | One round-trip orchestration over `search` → `symbol_context` → `impact` per top candidate. Returns ticket → top symbols + caller/callee/inheritance + blast radius (archetype-tagged) + affected tests. | "Analyze this Jira ticket and tell me what to touch" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
 | `read_source` | Read source code of an indexed file with line numbers | "Show me lines 30-60 of BehandlingService.java" |
 | `list_repos` | List all indexed repositories with metadata | "What repos are indexed?" |
 | `search_pattern` | Text/regex search across indexed source files (delegates to ripgrep). Optional `trace` arg. | "Find all uses of `BigDecimal.ZERO`" |
 | `list_files` | List files in an indexed repo, filterable by directory and glob | "What `.kt` files live under `service/`?" |
+
+### detect_changes
+
+For a PR review, index the PR's base and pass `ref: "<base>...<head>"`. The callers of what a PR changes live on the base, and a method the PR adds has no callers yet.
+
+| `ref` | Base | Head |
+|---|---|---|
+| none | `HEAD` | working tree |
+| `a` | `a` | working tree |
+| `a..b` | `a` | `b` |
+| `a...b` | `git merge-base a b` | `b` |
+
+An omitted side of a range is `HEAD`. A ref that git cannot resolve returns an error.
+
+`side` selects which hunk lines are matched against the index:
+
+- `base` (review mode): old-side ranges, keyed on the `---` path. Renames resolve on the old path; added files have no base symbols. An insertion-only hunk (`@@ -N,0 …`) flags a symbol only when it contains both line N and line N+1, so code inserted inside a method body flags that method, and code inserted between two methods flags neither.
+- `head`: new-side lines, keyed on the `+++` path (the earlier behavior).
+
+When you omit `side`, it is `base` if you pass a `ref` and `ci_repos.last_commit` equals the resolved base, otherwise `head`. `warnings` reports an index whose commit differs from the side being matched.
+
+A class, interface, enum or object is moved from `changedSymbols` to `droppedContainers` when one of its non-field members also changed. It stays when only its header or fields changed. Each changed symbol's blast radius is computed by id, so overloads do not share callers.
 
 ### Search algorithm
 
@@ -228,7 +250,7 @@ The orchestrator parses the URL, fetches `GET /api/trace/<id>`, and pins the JSO
 | `search` | yes | Hybrid retrieval pipeline — FTS / semantic / name → RRF → final |
 | `impact` | yes | BFS hop counts, confidence buckets, top results |
 | `search_pattern` | yes | rg invocation, per-repo match counts, pre-trim totals |
-| `detect_changes` | yes | Diff stats, per-file symbol extraction, blast radius per changed symbol |
+| `detect_changes` | yes | Side and resolved base/head, warnings, diff stats, per-file symbol extraction, dropped containers, blast radius per changed symbol, affected count per edge kind |
 | `symbol_context`, `read_source`, `file_outline`, `list_files`, `list_repos` | no | Single-step deterministic queries; nothing meaningful to surface |
 
 ### Enabling traces

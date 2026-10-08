@@ -5,7 +5,7 @@ import { z } from "zod";
 import { hybridSearch } from "../search/hybrid-search.ts";
 import { analyzeImpact } from "../search/impact.ts";
 import { ARCHETYPES } from "../search/archetype.ts";
-import { detectChanges } from "../search/detect-changes.ts";
+import { detectChanges, DetectChangesError } from "../search/detect-changes.ts";
 import { analyzeTicket } from "../search/analyze-ticket.ts";
 import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
@@ -191,15 +191,28 @@ server.tool(
 
 server.tool(
   "detect_changes",
-  "Given a git diff or commit range, identify which symbols changed and what is affected",
+  "Given a git diff or commit range, identify which symbols changed and what calls them. " +
+    "For a PR review, index the PR's base and pass ref 'base...head': the old-side hunk lines are matched against the base's symbols, so you get the callers of what the PR changes (side 'base'). " +
+    "A class is left out of changedSymbols (listed in droppedContainers) when one of its methods changed. " +
+    "affectedSymbols carry edge_kind and resolution; calls/overrides sort above imports. Check `warnings` for an index at the wrong commit.",
   {
     repo: z.string().describe("Repository name"),
-    ref: z.string().optional().describe("Git ref or range (default: uncommitted changes)"),
+    ref: z.string().optional().describe("Git ref or range: 'a...b' (base = merge-base), 'a..b' (base = a), 'a' (a vs working tree). Default: uncommitted changes"),
+    side: z
+      .enum(["base", "head"])
+      .optional()
+      .describe("Which side of the diff the index holds. Default: 'base' when a ref is given and the index's last commit is the diff's base, else 'head'"),
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
-  async ({ repo, ref, trace }) => {
+  async ({ repo, ref, side, trace }) => {
     const tracer = gateTracer(trace, () => new DetectChangesTracer());
-    const result = await detectChanges(repo, { ref, tracer });
+    let result;
+    try {
+      result = await detectChanges(repo, { ref, side, tracer });
+    } catch (err) {
+      if (err instanceof DetectChangesError) return textResponse(err.message + maybeAppendTracePointer(tracer));
+      throw err;
+    }
     if (!result) return textResponse(`Repository not found: ${repo}` + maybeAppendTracePointer(tracer));
     return jsonResponseWithTrace(result, tracer);
   },

@@ -128,6 +128,24 @@ describe("DetectChangesTracer", () => {
     expect(out.timingsMs.diff).toBe(8);
   });
 
+  test("toJSON captures side, refs, warnings, dropped containers and edge-kind counts", () => {
+    const t = new DetectChangesTracer();
+    t.setQuery("melosys-api", "a...b", "base");
+    t.setRefs("abc123", null);
+    t.recordWarning("index at x");
+    t.recordDroppedContainer("com.foo.Foo");
+    t.countAffectedEdgeKind("calls");
+    t.countAffectedEdgeKind("calls");
+    t.countAffectedEdgeKind("imports");
+
+    const out = t.toJSON();
+    expect(out.query).toEqual({ repo: "melosys-api", ref: "a...b", side: "base" });
+    expect(out.refs).toEqual({ base: "abc123", head: null });
+    expect(out.warnings).toEqual(["index at x"]);
+    expect(out.droppedContainers).toEqual(["com.foo.Foo"]);
+    expect(out.affectedByEdgeKind).toEqual({ calls: 2, imports: 1 });
+  });
+
   test("ref omitted when not set", () => {
     const t = new DetectChangesTracer();
     t.setQuery("melosys-api");
