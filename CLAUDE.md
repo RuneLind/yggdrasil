@@ -47,7 +47,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 | Tool | Purpose |
 |------|---------|
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg → pointer-mode trace (see Tracing below) |
-| `symbol_context` | 360-degree view: callers, callees, inheritance |
+| `symbol_context` | 360-degree view: callers, callees, inheritance, overrides / overridden_by |
 | `impact` | Blast radius with confidence scoring by depth. Follows dispatch through `overrides` edges: callers of an overridden method appear as `calls` with `via` naming it; impact of an interface method lists each implementation with `edge_kind = 'overrides'`. Each result carries the `edge_kind` and `resolution` of the edge that reached it and is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/config/util/builder/exception/other) via name+path heuristics. Optional `archetype_exclude` arg trims noise; `archetype_counts` on the response shows the pre-filter distribution. |
 | `detect_changes` | Git diff → affected symbols and their blast radius (inherits archetype tagging via `impact`) |
 | `analyze_ticket` | Ticket text → top candidate symbols, each bundled with caller/callee/inheritance context + blast radius + affected tests. One round-trip orchestration over `search`/`symbol_context`/`impact` (inherits archetype tagging). |
@@ -142,6 +142,7 @@ src/
 │   ├── impact.ts            — blast radius traversal
 │   ├── archetype.ts         — name+path heuristics for arketype-tagging impact results
 │   ├── analyze-ticket.ts    — ticket → candidate symbols + context bundle
+│   ├── symbol-context.ts    — edge buckets for symbol_context / analyze_ticket
 │   └── detect-changes.ts    — git diff → affected symbols
 ├── db/
 │   ├── connection.ts        — postgres connection

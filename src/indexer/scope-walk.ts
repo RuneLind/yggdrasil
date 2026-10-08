@@ -91,6 +91,11 @@ interface Frame {
   label?: string;
   /** Java: a positive pattern branch; bindings declared unknown skip it (see declareUnknown). */
   transient?: boolean;
+  /**
+   * Object literals and anonymous classes: the single supertype `super` means there, null
+   * when there are several or it is not a plain type.
+   */
+  literalSuper?: string | null;
 }
 
 class Scope {
@@ -120,15 +125,32 @@ class Scope {
 
   /**
    * `this.x` / `this@Label.x`: `name` among the members of the innermost class body, or
-   * of the class body named `label`. Null when that class does not declare it.
+   * of the class body named `label`; undefined when that class does not declare it (it
+   * may inherit it).
    */
-  member(name: string, label: string | null): Decl {
+  member(name: string, label: string | null): Decl | undefined {
     for (let i = this.frames.length - 1; i >= 0; i--) {
       const f = this.frames[i];
       if (f.className === undefined || (label !== null && f.className !== label)) continue;
-      return f.names.get(name) ?? null;
+      return f.names.has(name) ? f.names.get(name) : undefined;
     }
-    return null;
+    return undefined;
+  }
+
+  /** The innermost class body's literalSuper; undefined inside a named class. */
+  literalSuper(): string | null | undefined {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      if (this.frames[i].className !== undefined) return this.frames[i].literalSuper;
+    }
+    return undefined;
+  }
+
+  /** A declared type that names a type parameter reads as its single bound, else null. */
+  typeOrBound(d: Decl): Decl {
+    if (!d || d.includes(".")) return d;
+    const bound = this.typeParam(d);
+    if (bound === undefined) return d;
+    return bound && this.typeParam(bound) === undefined ? bound : null;
   }
 
   /** What an unqualified `this` refers to, by simple name; null when unknown. */
@@ -217,7 +239,22 @@ function withType(text: string, lookup: (name: string) => Decl | undefined): Rec
 }
 
 const NONE: Receiver = { receiver: null, receiverKind: "none", receiverType: null, receiverDeclared: false };
-const SUPER: Receiver = { receiver: "super", receiverKind: "super", receiverType: null, receiverDeclared: false };
+
+/**
+ * A `super` receiver. receiverType is the type `super` names: `super<I>` / `I.super`, or
+ * inside an object literal or anonymous class its single supertype; null for the
+ * enclosing named class's supertypes. A literal without a single supertype gets no edge.
+ */
+function superReceiver(explicit: string | null, scope: Scope): Receiver {
+  const literal = explicit === null ? scope.literalSuper() : undefined;
+  if (literal === null) return { receiver: "super", receiverKind: "chain-or-expression", receiverType: null, receiverDeclared: false };
+  return { receiver: "super", receiverKind: "super", receiverType: explicit ?? literal ?? null, receiverDeclared: false };
+}
+
+/** A receiver variable typed with a type parameter reads as its bound (see Scope.typeOrBound). */
+function boundReceiver(r: Receiver, scope: Scope): Receiver {
+  return r.receiverType === null ? r : { ...r, receiverType: scope.typeOrBound(r.receiverType) };
+}
 
 /**
  * Receiver steps by syntax node: `link` records that call `index` has the call or
@@ -294,8 +331,11 @@ function javaClassFrame(body: SyntaxNode, source: string): Frame {
       if (p.type === "formal_parameter") names.set(nodeText(p.childForFieldName("name") ?? p, source), javaType(p.childForFieldName("type"), source));
     }
   }
-  const nameNode = owner && owner.type !== "object_creation_expression" ? owner.childForFieldName("name") : null;
-  return { names, className: nameNode ? nodeText(nameNode, source) : null, typeParams: typeParamBounds(owner, source) };
+  const anonymous = owner?.type === "object_creation_expression";
+  const nameNode = owner && !anonymous ? owner.childForFieldName("name") : null;
+  const frame: Frame = { names, className: nameNode ? nodeText(nameNode, source) : null, typeParams: typeParamBounds(owner, source) };
+  if (anonymous) frame.literalSuper = javaType(owner.childForFieldName("type"), source);
+  return frame;
 }
 
 function javaParamFrame(owner: SyntaxNode, source: string): Frame {
@@ -465,7 +505,11 @@ export function extractJavaCalls(root: SyntaxNode, source: string, calls: Extrac
     const args = node.childForFieldName("arguments");
     const argNodes = args ? named(args).filter((c) => c.type !== "line_comment" && c.type !== "block_comment") : [];
     const object = node.childForFieldName("object");
-    const receiver = object?.type === "super" ? SUPER : javaReceiver(object, scope, source);
+    // `I.super.g()`: the object is `I`, followed by a `super` child.
+    const qualifiedSuper = object && object.type !== "super" && named(node).some((c) => c.type === "super");
+    const receiver = object?.type === "super" ? superReceiver(null, scope)
+      : qualifiedSuper ? superReceiver(javaType(object, source), scope)
+      : boundReceiver(javaReceiver(object, scope, source), scope);
     const index = calls.length;
     links.recorded(node, index);
     calls.push({
@@ -583,10 +627,18 @@ function kotlinClassFrame(body: SyntaxNode, source: string): { frame: Frame; cto
   const nameNode = owner && (owner.type === "class_declaration" || owner.type === "object_declaration")
     ? owner.childForFieldName("name") ?? findNamedChild(owner, "identifier")
     : null;
-  return {
-    frame: { names, className: nameNode ? nodeText(nameNode, source) : null, typeParams: typeParamBounds(owner, source) },
-    ctorParams,
-  };
+  const frame: Frame = { names, className: nameNode ? nodeText(nameNode, source) : null, typeParams: typeParamBounds(owner, source) };
+  if (owner?.type === "object_literal") frame.literalSuper = kotlinLiteralSuper(owner, source);
+  return { frame, ctorParams };
+}
+
+/** An object literal's single supertype, normalized; null when it has several. */
+function kotlinLiteralSuper(literal: SyntaxNode, source: string): string | null {
+  const specs = named(findNamedChild(literal, "delegation_specifiers") ?? literal).filter((c) => c.type === "delegation_specifier");
+  if (specs.length !== 1) return null;
+  const first = specs[0].namedChild(0);
+  const type = first?.type === "user_type" ? first : first ? findNamedChild(first, "user_type") : null;
+  return type ? normalizeTypeName(nodeText(type, source)) : null;
 }
 
 function kotlinParamFrame(owner: SyntaxNode, source: string): Frame {
@@ -796,6 +848,22 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
       for (const d of named(node)) if (d.type === "variable_declaration" || d.type === "multi_variable_declaration") addKotlinVariable(d, names, source);
       return visitIn({ names }, node);
     }
+    if (node.type === "when_expression") {
+      // `when (val x = …)`: x is in scope in the branches, not in its own initializer.
+      const subject = findNamedChild(node, "when_subject");
+      const decl = subject ? findNamedChild(subject, "variable_declaration") : null;
+      if (subject && decl) {
+        const parts = all(subject);
+        const eq = parts.findIndex((c) => c.type === "=");
+        const value = eq >= 0 ? parts.slice(eq + 1).find((c) => c.isNamed) : null;
+        const names = new Map<string, Decl>([[nodeText(decl.namedChild(0) ?? decl, source), kotlinVariableType(decl, value, source)]]);
+        for (const c of all(node)) {
+          if (c.id === subject.id) visit(c);
+          else visitIn({ names }, c);
+        }
+        return;
+      }
+    }
     if (node.type === "catch_block") {
       const id = findNamedChild(node, "identifier");
       const names = new Map<string, Decl>();
@@ -815,7 +883,10 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
     if (callee.type === "navigation_expression") {
       const parts = named(callee);
       if (parts.length < 2) return;
-      receiver = parts[0].type === "super_expression" ? SUPER : kotlinReceiver(parts[0], scope, source);
+      if (parts[0].type === "super_expression") {
+        const explicit = findNamedChild(parts[0], "user_type");
+        receiver = superReceiver(explicit ? normalizeTypeName(nodeText(explicit, source)) : null, scope);
+      } else receiver = boundReceiver(kotlinReceiver(parts[0], scope, source), scope);
       methodName = nodeText(parts[parts.length - 1], source);
       step = parts[0];
       while (step.type === "unary_expression" && step.childForFieldName("operator")?.type === "!!") {
@@ -843,7 +914,7 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
       const member = step.namedChild(1)!;
       if (member.type === "identifier" && head.type !== "this_expression" && head.type !== "super_expression") {
         calls[index].receiverStep = calls.length;
-        calls.push(navigationStep(kotlinReceiver(head, scope, source), nodeText(member, source), step));
+        calls.push(navigationStep(boundReceiver(kotlinReceiver(head, scope, source), scope), nodeText(member, source), step));
       }
     }
   };

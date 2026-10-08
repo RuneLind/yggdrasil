@@ -38,7 +38,8 @@ export interface ImpactEntry {
 }
 
 /**
- * Confidence scoring by depth. Structural edges (extends/implements) get a boost.
+ * Confidence scoring by depth. Structural edges (extends/implements/overrides) get a
+ * boost; a dispatched caller (via set) scores like a direct one.
  * Depth 0 = the changed symbol itself (never present in the blast radius — the
  * traversal seeds direct callers at depth 1, see getImpact). So in practice the
  * lowest depth seen here is 1 (direct callers → 0.7); the depth-0 → 1.0 entry stays
@@ -48,7 +49,7 @@ export function confidenceScore(depth: number, edgeKind: string): number {
   const baseScore: Record<number, number> = { 0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2 };
   const base = baseScore[depth] ?? 0.1;
   const structuralBoost =
-    edgeKind === "extends" || edgeKind === "implements" ? 0.2 : 0;
+    edgeKind === "extends" || edgeKind === "implements" || edgeKind === "overrides" ? 0.2 : 0;
   return Math.min(1.0, base + structuralBoost);
 }
 

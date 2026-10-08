@@ -9,6 +9,7 @@ import { detectChanges } from "../search/detect-changes.ts";
 import { analyzeTicket } from "../search/analyze-ticket.ts";
 import { findSymbolByQualifiedName, getSymbolsByFile } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges } from "../db/edges.ts";
+import { edgeBuckets } from "../search/symbol-context.ts";
 import { getRepo, listRepos, listReposWithStats } from "../db/repos.ts";
 import { sql } from "../db/connection.ts";
 import {
@@ -122,7 +123,7 @@ server.tool(
 
 server.tool(
   "symbol_context",
-  "Get full context for a symbol: callers, callees, inheritance, file location",
+  "Get full context for a symbol: callers, callees, inheritance, overrides (ancestor methods it overrides) and overridden_by (its implementations), file location",
   {
     qualified_name: z.string().describe("Fully qualified symbol name (or partial — will match)"),
     repo: z.string().optional().describe("Filter to a specific repository"),
@@ -149,12 +150,7 @@ server.tool(
         signature: target.signature,
         visibility: target.visibility,
       },
-      callers: incoming.filter((e) => e.kind === "calls"),
-      callees: outgoing.filter((e) => e.kind === "calls"),
-      extends: outgoing.filter((e) => e.kind === "extends"),
-      implements: outgoing.filter((e) => e.kind === "implements"),
-      extended_by: incoming.filter((e) => e.kind === "extends"),
-      implemented_by: incoming.filter((e) => e.kind === "implements"),
+      ...edgeBuckets(incoming, outgoing),
     });
   },
 );

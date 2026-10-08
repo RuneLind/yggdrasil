@@ -89,10 +89,14 @@ export interface OverloadCandidate {
   paramNames: (string | null)[] | null;
   /** A variable-arity method (Java `...`, Kotlin `vararg`). */
   vararg?: boolean;
+  /** Per parameter (see ci_symbols.param_type_vars): '*' is the method's own unbounded type parameter. */
+  paramTypeVars?: (string | null)[] | null;
 }
 
 interface ArgFit {
   param: string | null;
+  /** The parameter's type variable ('*': takes any argument); null otherwise. */
+  typeVar: string | null;
   fit: 0 | 1 | 2;
 }
 
@@ -110,7 +114,7 @@ function argFitsOf(site: OverloadSite, c: OverloadCandidate, ctx: TypeContext): 
     const at = name === null ? i : c.paramNames?.indexOf(name) ?? -1;
     if (at < 0) return null;
     const param = c.paramTypes?.[at] ?? null;
-    out.push({ param, fit: argFit(site.argTypes?.[i] ?? null, param, ctx, site.language) });
+    out.push({ param, typeVar: c.paramTypeVars?.[at] ?? null, fit: argFit(site.argTypes?.[i] ?? null, param, ctx, site.language) });
   }
   return out;
 }
@@ -172,10 +176,12 @@ export function narrowOverloads<T extends OverloadCandidate>(site: OverloadSite,
   const per = candidates.map((c) => argFitsOf(site, c, ctx));
   const fits = per.map(weakest);
   if (Math.max(...fits) === 0) return candidates;
-  // Java phase 3: varargs only when no fixed-arity method is applicable. Every known
-  // argument type is a non-array, so a certain fit applies in phase 1 or 2.
+  // Java phase 3: varargs only when a fixed-arity method is not applicable. Every known
+  // argument type is a non-array, so a certain fit to a known parameter type (or to the
+  // method's own unbounded type parameter) applies in phase 1 or 2. A parameter of
+  // unknown type (an array, a class type parameter the receiver binds) may not apply.
   const fixedApplies = site.language === "java" && site.argTypes?.every((t) => t !== null)
-    && candidates.some((c, i) => !c.vararg && fits[i] === 2);
+    && candidates.some((c, i) => !c.vararg && fits[i] === 2 && per[i]!.every((f) => f.param !== null || f.typeVar === "*"));
   return candidates.filter((c, i) => {
     const f = fits[i];
     if (f === 0 || (fixedApplies && c.vararg)) return false;

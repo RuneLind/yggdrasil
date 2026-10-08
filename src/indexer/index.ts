@@ -17,7 +17,7 @@ import type { RepoConfig } from "../config.ts";
  * differing ci_repos.extractor_version re-extracts every file (content hashes alone don't).
  * The check is equality only: an older binary on a DB stamped with its version skips call sites.
  */
-export const EXTRACTOR_VERSION = 6;
+export const EXTRACTOR_VERSION = 7;
 
 /**
  * Whether a repo's stored extractor version forces a full re-extract. NULL (never gated)

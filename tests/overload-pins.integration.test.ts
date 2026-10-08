@@ -93,7 +93,9 @@ class Outer : Base() {
   });
 
   test("an implemented external interface does not hide a possible class parameter", async () => {
-    // Throwable might sit above Serializable on the class chain, making s(Throwable) the pick.
+    // An over-approximation: Beh's class chain is all in the repo, so it is no Throwable
+    // and javac picks s(Serializable); an implemented external interface still never
+    // hides a possible class parameter.
     expect(await callsFrom(repo, `${P}.Ser.c`)).toEqual([`${P}.Ser.s:10`, `${P}.Ser.s:9`]);
     // Through a repo interface that extends it: still not on the class chain.
     expect(await callsFrom(repo, `${P}.Ser.c2`)).toEqual([`${P}.Ser.s:10`, `${P}.Ser.s:9`]);

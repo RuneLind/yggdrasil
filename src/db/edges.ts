@@ -12,7 +12,7 @@ export interface CiEdge {
 }
 
 /** How a calls edge was resolved (see rebuildEdges); null for other edge kinds. */
-export type EdgeResolution = "local" | "static" | "typed" | "chain";
+export type EdgeResolution = "local" | "static" | "typed" | "chain" | "super";
 
 export interface EdgeInsert {
   source_id: string;
@@ -95,13 +95,21 @@ export interface ImpactRow {
 
 /**
  * Blast radius: incoming edges, transitively, up to maxDepth hops. Direct callers are at
- * depth 1 (the changed symbol itself is depth 0 and never listed).
+ * depth 1; the changed symbol itself is depth 0 and never listed, even when it reaches
+ * itself (a decorator calling the interface it implements).
  *
- * Dispatch: at each step the reached symbol also stands for every ancestor method it
+ * Dispatch: at each step the reached method also stands for every ancestor method it
  * overrides, whose incoming `calls` edges count as if they pointed at it, with `via` set
  * to that ancestor. Overrides edges run from each method to every ancestor declaration,
- * so this is one hop. Incoming `overrides` edges are ordinary edges: impact of an
- * interface method lists each implementation with edge_kind `overrides`.
+ * so this is one hop. A dispatched call is kept only when its receiver's static type
+ * (receiver_class_id; unknown keeps it) can hold an instance that runs the reached
+ * method: some class is both a subtype of the method's class and of the receiver's (or
+ * one of them). `super` calls are static, never dispatched. Incoming `overrides` edges
+ * are ordinary edges: impact of an interface method lists each implementation with
+ * edge_kind `overrides`.
+ *
+ * One entry per symbol, the shallowest; at equal depth a direct call, then another direct
+ * edge, then a dispatched call (via first by qualified name), then an overrides edge.
  *
  * PostgreSQL allows one recursive reference, so the dispatch step is a LATERAL inside the
  * recursive term. The join stays an equality on target_id, which keeps
@@ -109,32 +117,45 @@ export interface ImpactRow {
  * (ÅrsavregningService class seed, depth 3, melosys-api).
  */
 export async function getImpact(symbolId: string, maxDepth = 3): Promise<ImpactRow[]> {
-  return sql<ImpactRow[]>`
+  // The planner's row estimates for the recursive CTE are far too high, which triggers JIT
+  // compilation (~20 ms) on a query that runs in a few.
+  return sql.begin(async (tx) => {
+    await tx`SET LOCAL jit = off`;
+    return tx<ImpactRow[]>`
     WITH RECURSIVE impact AS (
       SELECT e.source_id AS id, 1 AS depth, e.kind AS edge_kind, e.resolution,
         CASE WHEN t.via THEN t.tid END AS via_id
       FROM (
-        SELECT ${symbolId}::uuid AS tid, false AS via
+        SELECT ${symbolId}::uuid AS tid, false AS via, NULL::uuid AS cls
         UNION ALL
-        SELECT o.target_id, true FROM ci_edges o WHERE o.kind = 'overrides' AND o.source_id = ${symbolId}
+        SELECT o.target_id, true, m.parent_id
+        FROM ci_edges o JOIN ci_symbols m ON m.id = o.source_id
+        WHERE o.kind = 'overrides' AND o.source_id = ${symbolId}
       ) t
-      JOIN ci_edges e ON e.target_id = t.tid AND (NOT t.via OR e.kind = 'calls')
+      JOIN ci_edges e ON e.target_id = t.tid AND (NOT t.via OR ${dispatched()})
+      WHERE e.source_id <> ${symbolId}
 
       UNION
 
       SELECT e.source_id, i.depth + 1, e.kind, e.resolution, CASE WHEN t.via THEN t.tid END
       FROM impact i
       CROSS JOIN LATERAL (
-        SELECT i.id AS tid, false AS via
+        SELECT i.id AS tid, false AS via, NULL::uuid AS cls
         UNION ALL
-        SELECT o.target_id, true FROM ci_edges o WHERE o.kind = 'overrides' AND o.source_id = i.id
+        SELECT o.target_id, true, m.parent_id
+        FROM ci_edges o JOIN ci_symbols m ON m.id = o.source_id
+        WHERE o.kind = 'overrides' AND o.source_id = i.id
       ) t
-      JOIN ci_edges e ON e.target_id = t.tid AND (NOT t.via OR e.kind = 'calls')
-      WHERE i.depth < ${maxDepth}
+      JOIN ci_edges e ON e.target_id = t.tid AND (NOT t.via OR ${dispatched()})
+      WHERE i.depth < ${maxDepth} AND e.source_id <> ${symbolId}
     ),
     shallowest AS (
-      SELECT DISTINCT ON (id) * FROM impact
-      ORDER BY id, depth, (via_id IS NOT NULL), edge_kind, resolution
+      SELECT DISTINCT ON (i.id) i.* FROM impact i
+      ORDER BY i.id, i.depth,
+        CASE WHEN i.edge_kind = 'calls' AND i.via_id IS NULL THEN 0
+          WHEN i.edge_kind = 'overrides' THEN 3
+          WHEN i.via_id IS NULL THEN 1 ELSE 2 END,
+        i.edge_kind, i.resolution, (SELECT v.qualified_name FROM ci_symbols v WHERE v.id = i.via_id), i.via_id
     )
     SELECT s.id, s.name, s.qualified_name, s.kind, f.path AS file_path, r.name AS repo_name,
       i.depth, i.edge_kind, i.resolution, i.via_id, v.qualified_name AS via
@@ -145,4 +166,12 @@ export async function getImpact(symbolId: string, maxDepth = 3): Promise<ImpactR
     LEFT JOIN ci_symbols v ON v.id = i.via_id
     ORDER BY s.id
   `;
+  }) as Promise<ImpactRow[]>;
 }
+
+/** A dispatched caller edge `e` of ancestor method t.tid, for a method of class t.cls (see getImpact). */
+const dispatched = () => sql`(e.kind = 'calls' AND e.resolution IS DISTINCT FROM 'super'
+  AND (e.receiver_class_id IS NULL OR EXISTS (
+    SELECT 1 FROM ci_class_ancestors sub
+    JOIN ci_class_ancestors rcv ON rcv.class_id = sub.class_id AND rcv.ancestor_id = e.receiver_class_id
+    WHERE sub.ancestor_id = t.cls)))`;

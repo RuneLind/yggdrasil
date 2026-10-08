@@ -1,6 +1,7 @@
 import type { SupportedLanguage } from "./parser.ts";
 import type { ExtractionResult } from "./symbol-extractor.ts";
 import { CONTAINER_KINDS, normalizeTypeName } from "./symbol-extractor.ts";
+import { canonicalType } from "./overloads.ts";
 import { nodeText, walkTree, findNamedChild } from "./ast-utils.ts";
 import { extractJavaCalls, extractKotlinCalls, type ExtractedCall } from "./scope-walk.ts";
 import type { Node as SyntaxNode } from "web-tree-sitter";
@@ -10,7 +11,38 @@ export { classifyReceiver, type ExtractedCall, type ReceiverKind } from "./scope
 export interface ExtractedInheritance {
   kind: "extends" | "implements";
   typeName: string;
+  /** Per type argument (`Repo<Foo>` → ["Foo"]): canonical simple name, null for a wildcard or non-path type. */
+  typeArgs: (string | null)[];
   symbolIndex: number;
+}
+
+/** The top-level type arguments of the last segment of a type as written. */
+export function typeArguments(text: string): (string | null)[] {
+  const open = text.indexOf("<");
+  if (open < 0) return [];
+  const args: string[] = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "<") depth++;
+    else if (ch === ">" && text[i - 1] !== "-") {
+      depth--;
+      if (depth === 0) {
+        args.push(text.slice(start, i));
+        break;
+      }
+    } else if (ch === "," && depth === 1) {
+      args.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return args.map((a) => {
+    const t = a.trim();
+    if (/^(\?|\*|in\s|out\s)/.test(t)) return null;
+    const n = normalizeTypeName(t);
+    return n === null ? null : canonicalType(n);
+  });
 }
 
 export interface CallGraphResult {
@@ -93,12 +125,14 @@ function extractJavaInheritance(
     if (superclassNode) {
       const typeList = findNamedChild(superclassNode, "type_list");
       if (typeList) {
-        extractTypeListNames(typeList, source).forEach((typeName) =>
-          inheritance.push({ kind: "extends", typeName, symbolIndex }),
+        extractTypeListNames(typeList, source).forEach(({ typeName, typeArgs }) =>
+          inheritance.push({ kind: "extends", typeName, typeArgs, symbolIndex }),
         );
       } else {
-        const typeName = superclassNode.namedChild(0) && normalizeTypeName(nodeText(superclassNode.namedChild(0)!, source));
-        if (typeName) inheritance.push({ kind: "extends", typeName, symbolIndex });
+        const typeNode = superclassNode.namedChild(0);
+        const text = typeNode ? nodeText(typeNode, source) : "";
+        const typeName = normalizeTypeName(text);
+        if (typeName) inheritance.push({ kind: "extends", typeName, typeArgs: typeArguments(text), symbolIndex });
       }
     }
 
@@ -107,19 +141,24 @@ function extractJavaInheritance(
     if (interfacesNode) {
       const typeList = findNamedChild(interfacesNode, "type_list");
       if (typeList) {
-        extractTypeListNames(typeList, source).forEach((typeName) =>
-          inheritance.push({ kind: "implements", typeName, symbolIndex }),
+        extractTypeListNames(typeList, source).forEach(({ typeName, typeArgs }) =>
+          inheritance.push({ kind: "implements", typeName, typeArgs, symbolIndex }),
         );
       }
     }
   });
 }
 
-/** Type names of a type_list, normalized (generic arguments dropped, `Outer.Inner` kept). */
-function extractTypeListNames(typeList: SyntaxNode, source: string): string[] {
-  return typeList.namedChildren
-    .map((child: SyntaxNode) => normalizeTypeName(nodeText(child, source)))
-    .filter((name: string | null): name is string => name !== null);
+/** Type names of a type_list, normalized (generic arguments dropped, `Outer.Inner` kept), with their type arguments. */
+function extractTypeListNames(typeList: SyntaxNode, source: string): { typeName: string; typeArgs: (string | null)[] }[] {
+  const out: { typeName: string; typeArgs: (string | null)[] }[] = [];
+  for (const child of typeList.namedChildren) {
+    if (!child) continue;
+    const text = nodeText(child, source);
+    const typeName = normalizeTypeName(text);
+    if (typeName) out.push({ typeName, typeArgs: typeArguments(text) });
+  }
+  return out;
 }
 
 /**
@@ -159,13 +198,15 @@ function extractKotlinInheritance(
 
       if (firstChild.type === "constructor_invocation") {
         const userType = findNamedChild(firstChild, "user_type");
-        const typeName = userType && normalizeTypeName(nodeText(userType, source));
-        if (typeName) inheritance.push({ kind: "extends", typeName, symbolIndex });
+        const text = userType ? nodeText(userType, source) : "";
+        const typeName = normalizeTypeName(text);
+        if (typeName) inheritance.push({ kind: "extends", typeName, typeArgs: typeArguments(text), symbolIndex });
       } else if (firstChild.type === "user_type" || firstChild.type === "explicit_delegation") {
         // `I by impl` (explicit_delegation) implements I like a plain `I`.
         const userType = firstChild.type === "user_type" ? firstChild : findNamedChild(firstChild, "user_type");
-        const typeName = userType && normalizeTypeName(nodeText(userType, source));
-        if (typeName) inheritance.push({ kind: "implements", typeName, symbolIndex });
+        const text = userType ? nodeText(userType, source) : "";
+        const typeName = normalizeTypeName(text);
+        if (typeName) inheritance.push({ kind: "implements", typeName, typeArgs: typeArguments(text), symbolIndex });
       }
     }
   });

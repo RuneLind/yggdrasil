@@ -165,7 +165,7 @@ describe("overload applicability table", () => {
     ["java", "MyEx", ["t:null", "thr:Throwable"], ["t", "thr"], "<T> g(T) vs g(Throwable): g(Throwable) when MyEx is one"],
     ["java", "MyEx", ["var:null...", "thr:Throwable"], ["thr", "var"], "h(Object...) vs h(Throwable): h(Throwable) if applicable"],
     ["java", "String", ["var:null...", "str:String"], ["str"], "a fixed-arity method applicable in phase 1 hides varargs"],
-    ["java", "Behandling", ["ser:Serializable", "thr:Throwable"], ["ser", "thr"], "an implemented external interface does not hide a possible class"],
+    ["java", "Behandling", ["ser:Serializable", "thr:Throwable"], ["ser", "thr"], "over-approximation: Behandling's class chain is in the repo, so Throwable is impossible, but an implemented external interface never hides a possible class"],
     ["java", "MyEx", ["rt:RuntimeException", "thr:Throwable"], ["rt"], "an external superclass is more specific than any unknown supertype"],
     ["java", "Behandling", ["base:BaseEntity", "ext:WebClientResponseException"], ["base"], "a repo superclass beats an unrelated external class"],
     ["java", "int", ["int:int", "long:long"], ["int", "long"], "an int arg to Integer loses to long in phase 1"],

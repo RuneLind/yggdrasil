@@ -83,6 +83,15 @@ export interface ExtractedSymbol {
   paramNames: (string | null)[] | null;
   /** Kotlin extension function: the receiver type, normalized. */
   extensionReceiver: string | null;
+  /** Callables only, per parameter: see ci_symbols.param_type_vars. */
+  paramTypeVars: (string | null)[] | null;
+  /** Classes only: own type parameter names, in order. */
+  typeParams: string[] | null;
+  /**
+   * Declared inside a callable, initializer, lambda, object literal or anonymous class
+   * body rather than directly in its parent container (or at top level).
+   */
+  isLocal: boolean;
 }
 
 export interface ExtractedImport {
@@ -109,6 +118,7 @@ export function extractSymbols(
 
   let packageName: string | null = null;
   const symbols: ExtractedSymbol[] = [];
+  const nodes: SyntaxNode[] = [];
   const imports: ExtractedImport[] = [];
 
   for (const match of matches) {
@@ -174,8 +184,10 @@ export function extractSymbols(
         visibility,
         isStatic: checkStatic(patternNode),
         parentIndex: null, // resolved in a second pass
+        isLocal: false,
         ...shape,
       });
+      nodes.push(patternNode);
     }
   }
 
@@ -197,7 +209,40 @@ export function extractSymbols(
     }
   }
 
+  for (let i = 0; i < symbols.length; i++) {
+    const parent = symbols[i].parentIndex === null ? null : symbols[symbols[i].parentIndex!];
+    const scope = enclosingScope(nodes[i], parent);
+    symbols[i].isLocal = scope.local;
+    if (scope.companion) symbols[i].isStatic = true;
+  }
+
   return { packageName, symbols, imports };
+}
+
+/** Nodes between a declaration and its container that make the declaration local. */
+const LOCAL_SCOPES: ReadonlySet<string> = new Set([
+  // Kotlin
+  "function_declaration", "secondary_constructor", "anonymous_initializer", "lambda_literal",
+  "anonymous_function", "object_literal", "getter", "setter",
+  // Java
+  "method_declaration", "constructor_declaration", "lambda_expression", "object_creation_expression",
+  "static_initializer", "block",
+]);
+
+/**
+ * Whether anything between `node` and its parent container's node (or the root) makes the
+ * declaration local (see LOCAL_SCOPES), and whether it sits in a Kotlin companion object.
+ * A Java class body's instance initializer is a `block`.
+ */
+function enclosingScope(node: SyntaxNode, parent: ExtractedSymbol | null): { local: boolean; companion: boolean } {
+  let local = false;
+  let companion = false;
+  for (let n = node.parent; n; n = n.parent) {
+    if (parent && n.startIndex === parent.startIndex && n.endIndex === parent.endIndex) break;
+    if (LOCAL_SCOPES.has(n.type)) local = true;
+    if (n.type === "companion_object") companion = true;
+  }
+  return { local, companion };
 }
 
 /** `import a.b.C`, `import a.b.*`, `import a.b.C as D`, read from the AST. */
@@ -288,46 +333,92 @@ function kotlinLiteralType(value: SyntaxNode, source: string): string | null {
 
 type DeclarationShape = Pick<
   ExtractedSymbol,
-  "declaredType" | "minParams" | "maxParams" | "paramTypes" | "paramNames" | "extensionReceiver"
+  "declaredType" | "minParams" | "maxParams" | "paramTypes" | "paramNames" | "extensionReceiver" | "paramTypeVars" | "typeParams"
 >;
 
-/** Names of the type parameters in scope at `node`: its own and every enclosing declaration's. */
-function typeParameterNames(node: SyntaxNode, source: string): Set<string> {
-  const names = new Set<string>();
-  for (let n: SyntaxNode | null = node; n; n = n.parent) {
-    for (const tp of findNamedChild(n, "type_parameters")?.namedChildren ?? []) {
-      const id = tp?.type === "type_parameter"
-        ? tp.namedChildren.find((c) => c?.type === "identifier" || c?.type === "type_identifier")
-        : undefined;
-      if (id) names.add(nodeText(id, source));
-    }
+/** A declaration's own type parameters → their bounds (normalized; empty when unbounded). */
+function ownTypeParams(node: SyntaxNode, source: string): Map<string, (string | null)[]> {
+  const out = new Map<string, (string | null)[]>();
+  const tps = node.childForFieldName("type_parameters") ?? findNamedChild(node, "type_parameters");
+  for (const tp of tps?.namedChildren ?? []) {
+    if (tp?.type !== "type_parameter") continue;
+    const parts = tp.namedChildren.filter((c): c is SyntaxNode => c !== null && !/annotation|modifiers/.test(c.type));
+    if (!parts[0]) continue;
+    const bound = parts[1]?.type === "type_bound" ? parts[1].namedChildren.filter((c): c is SyntaxNode => c !== null) : parts.slice(1);
+    out.set(nodeText(parts[0], source), bound.map((b) => normalizeTypeName(nodeText(b, source))));
   }
-  return names;
+  return out;
 }
 
-/** A parameter's declared type → canonical simple name; null for a type parameter or a non-path type. */
-function paramType(typeNode: SyntaxNode | null | undefined, typeParams: Set<string>, source: string): string | null {
+/** Type parameters in scope at `node`, innermost first: whether the callable at `node` declares each, and its bounds. */
+function typeParamsInScope(node: SyntaxNode, source: string): Map<string, { own: boolean; bounds: (string | null)[] }> {
+  const out = new Map<string, { own: boolean; bounds: (string | null)[] }>();
+  for (let n: SyntaxNode | null = node; n; n = n.parent) {
+    for (const [name, bounds] of ownTypeParams(n, source)) {
+      if (!out.has(name)) out.set(name, { own: n.id === node.id, bounds });
+    }
+  }
+  return out;
+}
+
+/** A type parameter's single bound when it is a plain type, else null. */
+function singleBound(bounds: (string | null)[], inScope: Map<string, unknown>): string | null {
+  return bounds.length === 1 && bounds[0] !== null && !inScope.has(bounds[0]) ? bounds[0] : null;
+}
+
+/** A declared type, normalized; a type parameter reads as its single bound (null without one). */
+function declaredTypeOf(normalized: string | null, inScope: Map<string, { own: boolean; bounds: (string | null)[] }>): string | null {
+  if (normalized === null) return null;
+  const tp = inScope.get(normalized);
+  return tp ? singleBound(tp.bounds, inScope) : normalized;
+}
+
+/**
+ * A parameter's declared type → [canonical simple name, type variable] (see
+ * ci_symbols.param_types and param_type_vars). The callable's own type parameter reads as
+ * its single bound, or '*' when unbounded; an enclosing class's type parameter keeps its
+ * name, since the receiver's type arguments bind it.
+ */
+function paramShape(
+  typeNode: SyntaxNode | null | undefined,
+  inScope: Map<string, { own: boolean; bounds: (string | null)[] }>,
+  source: string,
+): [string | null, string | null] {
   const normalized = typeNode ? normalizeTypeName(nodeText(typeNode, source)) : null;
-  return normalized === null || typeParams.has(normalized) ? null : canonicalType(normalized);
+  if (normalized === null) return [null, null];
+  const tp = inScope.get(normalized);
+  if (!tp) return [canonicalType(normalized), null];
+  if (!tp.own) return [null, normalized];
+  if (tp.bounds.length === 0) return [null, "*"];
+  const bound = singleBound(tp.bounds, inScope);
+  return [bound === null ? null : canonicalType(bound), null];
 }
 
 function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: string): DeclarationShape {
   const none: DeclarationShape = {
     declaredType: null, minParams: null, maxParams: null, paramTypes: null, paramNames: null, extensionReceiver: null,
+    paramTypeVars: null, typeParams: null,
   };
+  if (CLASS_NODES.has(node.type)) {
+    return { ...none, typeParams: [...ownTypeParams(node, source).keys()] };
+  }
   if (lang === "java" && (node.type === "method_declaration" || node.type === "constructor_declaration")) {
-    const typeParams = typeParameterNames(node, source);
+    const inScope = typeParamsInScope(node, source);
     const params = node.childForFieldName("parameters");
     const paramTypes: (string | null)[] = [];
+    const paramTypeVars: (string | null)[] = [];
     const paramNames: (string | null)[] = [];
     let vararg = false;
     for (const p of params?.namedChildren ?? []) {
       if (p?.type === "formal_parameter") {
-        paramTypes.push(paramType(p.childForFieldName("type"), typeParams, source));
+        const [type, typeVar] = paramShape(p.childForFieldName("type"), inScope, source);
+        paramTypes.push(type);
+        paramTypeVars.push(typeVar);
         paramNames.push(nodeText(p.childForFieldName("name") ?? p, source));
       } else if (p?.type === "spread_parameter") {
         vararg = true;
         paramTypes.push(null);
+        paramTypeVars.push(null);
         const name = findNamedChild(p, "variable_declarator")?.childForFieldName("name");
         paramNames.push(name ? nodeText(name, source) : null);
       }
@@ -336,10 +427,11 @@ function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: str
     const type = node.childForFieldName("type");
     return {
       ...none,
-      declaredType: type ? normalizeTypeName(nodeText(type, source)) : null,
+      declaredType: declaredTypeOf(type ? normalizeTypeName(nodeText(type, source)) : null, inScope),
       minParams: count,
       maxParams: vararg ? null : count,
       paramTypes,
+      paramTypeVars,
       paramNames,
     };
   }
@@ -347,11 +439,12 @@ function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: str
     const children = node.children.filter((c): c is SyntaxNode => c !== null);
     const paramsAt = children.findIndex((c) => c.type === "function_value_parameters");
     if (paramsAt < 0) return none;
-    const typeParams = typeParameterNames(node, source);
+    const inScope = typeParamsInScope(node, source);
     let min = 0;
     let max: number | null = 0;
     let varargNext = false;
     const paramTypes: (string | null)[] = [];
+    const paramTypeVars: (string | null)[] = [];
     const paramNames: (string | null)[] = [];
     const params = children[paramsAt].children.filter((c): c is SyntaxNode => c !== null);
     for (let i = 0; i < params.length; i++) {
@@ -361,7 +454,11 @@ function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: str
       const vararg = varargNext || nodeText(p, source).startsWith("vararg");
       varargNext = false;
       paramNames.push(nodeText(p.namedChild(0) ?? p, source));
-      paramTypes.push(vararg ? null : paramType(p.namedChildren.find((c) => c !== null && KOTLIN_TYPE_NODES.has(c.type)), typeParams, source));
+      const [type, typeVar] = vararg
+        ? [null, null]
+        : paramShape(p.namedChildren.find((c) => c !== null && KOTLIN_TYPE_NODES.has(c.type)), inScope, source);
+      paramTypes.push(type);
+      paramTypeVars.push(typeVar);
       if (vararg) max = null;
       else {
         if (max !== null) max++;
@@ -373,10 +470,12 @@ function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: str
     const nameAt = children.findIndex((c) => c.id === node.childForFieldName("name")?.id);
     const receiver = nameAt >= 2 && children[nameAt - 1].type === "." ? children[nameAt - 2] : undefined;
     return {
-      declaredType: colon ? normalizeTypeName(nodeText(colon, source)) : null,
+      ...none,
+      declaredType: declaredTypeOf(colon ? normalizeTypeName(nodeText(colon, source)) : null, inScope),
       minParams: min,
       maxParams: max,
       paramTypes,
+      paramTypeVars,
       paramNames,
       extensionReceiver: receiver ? normalizeTypeName(nodeText(receiver, source)) : null,
     };
@@ -385,10 +484,12 @@ function declarationShape(node: SyntaxNode, lang: SupportedLanguage, source: str
     const decl = findNamedChild(node, "variable_declaration");
     const eq = node.children.findIndex((c) => c?.type === "=");
     const value = eq >= 0 ? node.children.slice(eq + 1).find((c) => c?.isNamed) : null;
-    return { ...none, declaredType: decl ? kotlinVariableType(decl, value, source) : null };
+    return { ...none, declaredType: declaredTypeOf(decl ? kotlinVariableType(decl, value, source) : null, typeParamsInScope(node, source)) };
   }
   return none;
 }
+
+const CLASS_NODES: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "record_declaration"]);
 
 const CAPTURE_TO_KIND: Record<string, SymbolKind> = {
   class: "class", interface: "interface", enum: "enum",
@@ -522,5 +623,8 @@ export function toSymbolInserts(
     param_types: sym.paramTypes,
     param_names: sym.paramNames,
     extension_receiver: sym.extensionReceiver,
+    is_local: sym.isLocal,
+    type_params: sym.typeParams,
+    param_type_vars: sym.paramTypeVars,
   }));
 }

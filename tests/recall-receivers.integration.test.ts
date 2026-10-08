@@ -132,9 +132,9 @@ class KLeaf : Mid() {
   });
 
   test("super.foo() reaches the nearest ancestor that declares foo", async () => {
-    expect(await callsFrom(repo, `${P}.Mid.navn`)).toEqual([`${P}.Base.navn:4@local`]);
-    expect(await callsFrom(repo, `${P}.Leaf.navn`)).toEqual([`${P}.Base.tom:5@local`, `${P}.Mid.navn:4@local`]);
-    expect(await callsFrom(repo, `${P}.KLeaf.navn`)).toEqual([`${P}.Mid.navn:4@local`]);
+    expect(await callsFrom(repo, `${P}.Mid.navn`)).toEqual([`${P}.Base.navn:4@super`]);
+    expect(await callsFrom(repo, `${P}.Leaf.navn`)).toEqual([`${P}.Base.tom:5@super`, `${P}.Mid.navn:4@super`]);
+    expect(await callsFrom(repo, `${P}.KLeaf.navn`)).toEqual([`${P}.Mid.navn:4@super`]);
   });
 
   test("Kotlin class delegation is an implements edge, so calls on its members resolve", async () => {
