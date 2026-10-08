@@ -13,6 +13,11 @@ const MAIN = "src/main/kotlin/no/nav/test/Tjeneste.kt";
 const TEST = "src/test/kotlin/no/nav/test/TjenesteTest.kt";
 const PAREN_NAME = "lagre med LAV parent og HØY child skal beholde child sin HØY (typen vinner)";
 const DOT_NAME = "versjon 2.0 skal lagres";
+const OV = "src/main/java/no/nav/test/Ov.java";
+const OV_USER = "src/main/java/no/nav/test/OvBruker.java";
+// Over 200 characters, so the stored signature is cut before `f(` and its first `(` is
+// the annotation's, which holds two arguments.
+const LONG = "x".repeat(220);
 
 describe.skipIf(!RUN)("eval-callers on a fixture repo", () => {
   let repo: FixtureRepo;
@@ -35,6 +40,27 @@ class TjenesteTest {
     fun \`${DOT_NAME}\`() {
         Tjeneste.lagre(2)
     }
+}
+`,
+      [OV]: `package no.nav.test;
+
+public class Ov {
+    @Deprecated(since = "${LONG}", forRemoval = false)
+    public static void f(int a) {}
+    public static void f(int a, int b) {}
+    public static void g(int a) {}
+    public static void g(int a, int b) {}
+    public static void h(String s) {}
+    public static void h(long a) {}
+}
+`,
+      [OV_USER]: `package no.nav.test;
+
+public class OvBruker {
+    void en() { Ov.f(1); Ov.g(1); }
+    void to() { Ov.f(1, 2); Ov.g(1, 2); }
+    void str() { Ov.h("a"); }
+    void num() { Ov.h(1L); }
 }
 `,
     });
@@ -73,8 +99,66 @@ class TjenesteTest {
     expect(r.stdout).toContain("file src/main/kotlin/Feil.kt matches no candidate");
   });
 
-  test("repo not in the index → exit 1", async () => {
+  test("repo not in the index → exit 1 with the reason on stderr", async () => {
     const r = await runEval(await tempFixture(fixture(`itest-missing-${crypto.randomUUID().slice(0, 8)}`, MAIN)));
+    expect(r.stderr).toContain("is not indexed");
     expect(r.code).toBe(1);
+  });
+
+  const overloadFixture = (method: string) =>
+    JSON.stringify({
+      repo: repo.name,
+      symbols: [
+        {
+          qualified_name: `no.nav.test.Ov.${method}`,
+          intellij_signature: `${method}(int)`,
+          file: OV,
+          callers: [{ signature: "en()", file: OV_USER }],
+        },
+      ],
+    });
+
+  // Fails when eval main() stops passing the fixture's IntelliJ parameter count.
+  test("overloads are told apart by the fixture's parameter count", async () => {
+    const r = await runEval(await tempFixture(overloadFixture("g")));
+    expect(r.stdout).not.toContain("not disambiguated");
+    expect(r.stdout).toMatch(/production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
+  });
+
+  test("an overload whose stored signature is cut inside an annotation is told apart", async () => {
+    const r = await runEval(await tempFixture(overloadFixture("f")));
+    expect(r.stdout).not.toContain("not disambiguated");
+    expect(r.stdout).toMatch(/production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
+  });
+
+  // Same arity: only the IntelliJ parameter types tell h(String) from h(long).
+  test("same-arity overloads are told apart by the fixture's parameter types", async () => {
+    const r = await runEval(
+      await tempFixture(
+        JSON.stringify({
+          repo: repo.name,
+          symbols: [
+            {
+              qualified_name: "no.nav.test.Ov.h",
+              intellij_signature: "h(String)",
+              file: OV,
+              callers: [{ signature: "OvBruker.str()", file: OV_USER }],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(r.stdout).not.toContain("not disambiguated");
+    expect(r.stdout).toMatch(/production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
+  });
+
+  test("a symbol missing from the index gets no file-mismatch note", async () => {
+    const r = await runEval(
+      await tempFixture(
+        JSON.stringify({ repo: repo.name, symbols: [{ qualified_name: "no.nav.test.Finnes.ikke", file: MAIN, callers: [] }] }),
+      ),
+    );
+    expect(r.stdout).toContain("not found in the index");
+    expect(r.stdout).not.toContain("matches no candidate");
   });
 });

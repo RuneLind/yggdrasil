@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { countParams, intellijMethodName, intellijParamCount } from "../scripts/eval-callers-parse.ts";
+import { countParams, declaredParamCount, intellijMethodName, intellijParamCount, intellijParamTypes, paramTypesMatch } from "../scripts/eval-callers-parse.ts";
 
 const strip = (s: string) => s.replace(/`/g, "");
 
@@ -37,5 +37,42 @@ describe("intellijParamCount", () => {
   test("reads the final group, not a `(` inside a test name", () => {
     expect(intellijParamCount("KlasseTest.lagre med HØY (typen vinner)()")).toBe(0);
     expect(intellijParamCount("Foo.bar(Baz, Map<A, B>)")).toBe(2);
+  });
+});
+
+describe("declaredParamCount", () => {
+  test("all parameters when there is no vararg", () => {
+    expect(declaredParamCount(2, 3)).toBe(3);
+  });
+
+  test("required parameters plus the vararg", () => {
+    expect(declaredParamCount(1, null)).toBe(2);
+  });
+
+  test("unknown without min_params", () => {
+    expect(declaredParamCount(null, null)).toBeNull();
+  });
+});
+
+describe("intellijParamTypes", () => {
+  test("simple names, generics and nullability stripped, boxed twins folded", () => {
+    expect(intellijParamTypes("Foo.bar(String, Int, Instant?)")).toEqual(["String", "int", "Instant"]);
+    expect(intellijParamTypes("landErEessiReady(String, Collection<Land_iso2>)")).toEqual(["String", "Collection"]);
+    expect(intellijParamTypes("hentPersonMedHistorikk(long)")).toEqual(["long"]);
+    expect(intellijParamTypes("f(OppgaveMigrering.Options, Map<A, B>)")).toEqual(["Options", "Map"]);
+    expect(intellijParamTypes("g()")).toEqual([]);
+  });
+
+  test("a type that is not an identifier path is unknown", () => {
+    expect(intellijParamTypes("f((String) -> Unit, int[])")).toEqual([null, null]);
+  });
+});
+
+describe("paramTypesMatch", () => {
+  test("an unknown type on either side is a wildcard; known types must be equal", () => {
+    expect(paramTypesMatch(["long", null], ["long", "String"])).toBe(true);
+    expect(paramTypesMatch(["long", "String"], ["long", null])).toBe(true);
+    expect(paramTypesMatch(["long", "String"], ["long", "int"])).toBe(false);
+    expect(paramTypesMatch(["long"], ["long", null])).toBe(false);
   });
 });

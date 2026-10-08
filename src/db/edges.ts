@@ -8,7 +8,11 @@ export interface CiEdge {
   target_id: string;
   kind: EdgeKind;
   line: number | null;
+  resolution: EdgeResolution | null;
 }
+
+/** How a calls edge was resolved (see rebuildEdges); null for other edge kinds. */
+export type EdgeResolution = "local" | "static" | "typed";
 
 export interface EdgeInsert {
   source_id: string;
@@ -78,7 +82,7 @@ export async function getOutgoingEdges(symbolId: string): Promise<EdgeNeighbor[]
 export async function getImpact(
   symbolId: string,
   maxDepth = 3,
-): Promise<{ id: string; name: string; qualified_name: string; kind: string; file_path: string; repo_name: string; depth: number; edge_kind: string }[]> {
+): Promise<{ id: string; name: string; qualified_name: string; kind: string; file_path: string; repo_name: string; depth: number; edge_kind: string; resolution: EdgeResolution | null }[]> {
   return sql`
     WITH RECURSIVE impact AS (
       -- Direct callers seed at depth 1 (depth 0 is the changed symbol itself), and
@@ -90,7 +94,7 @@ export async function getImpact(
       SELECT
         s.id, s.name, s.qualified_name, s.kind,
         f.path as file_path, r.name as repo_name,
-        1 as depth, e.kind as edge_kind
+        1 as depth, e.kind as edge_kind, e.resolution
       FROM ci_edges e
       JOIN ci_symbols s ON s.id = e.source_id
       JOIN ci_files f ON f.id = s.file_id
@@ -102,7 +106,7 @@ export async function getImpact(
       SELECT
         s.id, s.name, s.qualified_name, s.kind,
         f.path as file_path, r.name as repo_name,
-        i.depth + 1, e.kind as edge_kind
+        i.depth + 1, e.kind as edge_kind, e.resolution
       FROM ci_edges e
       JOIN ci_symbols s ON s.id = e.source_id
       JOIN ci_files f ON f.id = s.file_id
@@ -110,6 +114,6 @@ export async function getImpact(
       JOIN impact i ON e.target_id = i.id
       WHERE i.depth < ${maxDepth}
     )
-    SELECT DISTINCT ON (id) * FROM impact ORDER BY id, depth
+    SELECT DISTINCT ON (id) * FROM impact ORDER BY id, depth, edge_kind, resolution
   `;
 }

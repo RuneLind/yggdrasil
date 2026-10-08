@@ -1,4 +1,6 @@
 /** Pure signature parsing for eval-callers.ts, kept import-safe (no DB, no main()). */
+import { normalizeTypeName } from "../src/indexer/symbol-extractor.ts";
+import { canonicalType } from "../src/indexer/overloads.ts";
 
 const OPEN = "(<[{";
 const CLOSE = ")>]}";
@@ -77,9 +79,45 @@ export function intellijParamCount(signature: string): number | null {
   return open >= 0 ? countParams(signature, open) : null;
 }
 
-/** Parameter count of a ci_symbols signature, read from the group after the method name. */
-export function symbolParamCount(signature: string | null, name: string): number | null {
-  if (!signature) return null;
-  const at = signature.indexOf(`${name}(`);
-  return countParams(signature, at >= 0 ? at + name.length : 0);
+/**
+ * Parameter types of an IntelliJ signature's final group, canonical like
+ * ci_symbols.param_types (simple name, generics and `?` stripped, boxed twins folded);
+ * null for a type that is not an identifier path (function type, array, vararg).
+ */
+export function intellijParamTypes(signature: string): (string | null)[] | null {
+  const open = lastGroupStart(signature);
+  if (open < 0) return null;
+  const inner = signature.slice(open + 1, signature.lastIndexOf(")"));
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (OPEN.includes(ch)) depth++;
+    else if (CLOSE.includes(ch) && !(ch === ">" && inner[i - 1] === "-")) depth--;
+    if (ch === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+    } else current += ch;
+  }
+  if (current.trim() !== "") parts.push(current);
+  return parts.map((p) => {
+    const normalized = normalizeTypeName(p.trim());
+    return normalized ? canonicalType(normalized) : null;
+  });
+}
+
+/**
+ * Declared parameter count from ci_symbols.min_params/max_params (from the AST): all
+ * parameters, or the required ones plus the vararg when max_params is null.
+ */
+export function declaredParamCount(minParams: number | null | undefined, maxParams: number | null | undefined): number | null {
+  if (minParams === null || minParams === undefined) return null;
+  return maxParams ?? minParams + 1;
+}
+
+/** Same length, and equal at every position where both types are known. */
+export function paramTypesMatch(want: (string | null)[], have: (string | null)[] | null | undefined): boolean {
+  if (!have || have.length !== want.length) return false;
+  return want.every((w, i) => w === null || have[i] === null || w === have[i]);
 }

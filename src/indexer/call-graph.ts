@@ -1,42 +1,11 @@
 import type { SupportedLanguage } from "./parser.ts";
 import type { ExtractionResult } from "./symbol-extractor.ts";
-import { CONTAINER_KINDS } from "./symbol-extractor.ts";
+import { CONTAINER_KINDS, normalizeTypeName } from "./symbol-extractor.ts";
 import { nodeText, walkTree, findNamedChild } from "./ast-utils.ts";
-import type { SyntaxNode } from "web-tree-sitter";
+import { extractJavaCalls, extractKotlinCalls, type ExtractedCall } from "./scope-walk.ts";
+import type { Node as SyntaxNode } from "web-tree-sitter";
 
-export type ReceiverKind = "none" | "this" | "identifier" | "static-type" | "chain-or-expression";
-
-export interface ExtractedCall {
-  receiver: string | null;
-  receiverKind: ReceiverKind;
-  methodName: string;
-  /** Includes a Kotlin trailing lambda; null when a spread or named argument makes the count unreliable. */
-  argCount: number | null;
-  line: number;
-  /** Call node's start offset, same units as ExtractedSymbol.startIndex. */
-  startIndex: number;
-}
-
-// Continuation allows combining marks, so an NFD-encoded Å (A + U+030A) stays one identifier.
-const IDENT_PATH_SEGMENT = /^[\p{L}_$][\p{L}\p{M}\p{N}\p{Pc}\p{Sc}]*$/u;
-
-/**
- * Classify a receiver as extracted. `static-type` is an identifier path starting with an
- * uppercase letter (\p{Lu}, so Æ/Ø/Å count): it covers every receiver the static-call
- * rule can resolve, because that rule matches the receiver against a container's
- * qualified name, which is always an identifier path.
- */
-export function classifyReceiver(receiver: string | null): ReceiverKind {
-  if (receiver === null) return "none";
-  if (receiver === "this") return "this";
-  const segments = receiver.split(".");
-  const isPath = segments.every(
-    (seg) => IDENT_PATH_SEGMENT.test(seg) && seg !== "this" && seg !== "super",
-  );
-  if (!isPath) return "chain-or-expression";
-  if (/^\p{Lu}/u.test(receiver)) return "static-type";
-  return segments.length === 1 ? "identifier" : "chain-or-expression";
-}
+export { classifyReceiver, type ExtractedCall, type ReceiverKind } from "./scope-walk.ts";
 
 export interface ExtractedInheritance {
   kind: "extends" | "implements";
@@ -105,27 +74,6 @@ export function extractCallGraph(
 
 // ── Java ──
 
-function extractJavaCalls(root: SyntaxNode, source: string, calls: ExtractedCall[]) {
-  walkTree(root, (node) => {
-    if (node.type !== "method_invocation") return;
-
-    const nameNode = node.childForFieldName("name");
-    const objectNode = node.childForFieldName("object");
-    if (!nameNode) return;
-
-    const receiver = objectNode ? nodeText(objectNode, source) : null;
-    const args = node.childForFieldName("arguments");
-    calls.push({
-      receiver,
-      receiverKind: classifyReceiver(receiver),
-      methodName: nodeText(nameNode, source),
-      argCount: args ? args.namedChildren.filter((c: SyntaxNode) => !isComment(c)).length : 0,
-      line: node.startPosition.row + 1,
-      startIndex: node.startIndex,
-    });
-  });
-}
-
 function extractJavaInheritance(
   root: SyntaxNode,
   source: string,
@@ -133,15 +81,10 @@ function extractJavaInheritance(
   inheritance: ExtractedInheritance[],
 ) {
   walkTree(root, (node) => {
-    if (node.type !== "class_declaration" && node.type !== "interface_declaration") return;
+    if (node.type !== "class_declaration" && node.type !== "interface_declaration"
+      && node.type !== "record_declaration") return;
 
-    const nameNode = node.childForFieldName("name");
-    if (!nameNode) return;
-    const className = nodeText(nameNode, source);
-
-    const symbolIndex = extraction.symbols.findIndex(
-      (s) => s.name === className && CONTAINER_KINDS.has(s.kind),
-    );
+    const symbolIndex = declaringSymbolIndex(extraction, node);
     if (symbolIndex < 0) return;
 
     // extends (class superclass or interface extends)
@@ -154,10 +97,8 @@ function extractJavaInheritance(
           inheritance.push({ kind: "extends", typeName, symbolIndex }),
         );
       } else {
-        const typeNode = findNamedChild(superclassNode, "type_identifier");
-        if (typeNode) {
-          inheritance.push({ kind: "extends", typeName: nodeText(typeNode, source), symbolIndex });
-        }
+        const typeName = superclassNode.namedChild(0) && normalizeTypeName(nodeText(superclassNode.namedChild(0)!, source));
+        if (typeName) inheritance.push({ kind: "extends", typeName, symbolIndex });
       }
     }
 
@@ -174,87 +115,24 @@ function extractJavaInheritance(
   });
 }
 
-/** Extract type names from a type_list node (handles both type_identifier and generic_type). */
+/** Type names of a type_list, normalized (generic arguments dropped, `Outer.Inner` kept). */
 function extractTypeListNames(typeList: SyntaxNode, source: string): string[] {
-  const names: string[] = [];
-  for (let i = 0; i < typeList.namedChildCount; i++) {
-    const child = typeList.namedChild(i)!;
-    const typeNode = child.type === "generic_type"
-      ? findNamedChild(child, "type_identifier")
-      : child;
-    if (typeNode) names.push(nodeText(typeNode, source));
-  }
-  return names;
-}
-
-// ── Kotlin ──
-
-function extractKotlinCalls(root: SyntaxNode, source: string, calls: ExtractedCall[]) {
-  walkTree(root, (node) => {
-    if (node.type !== "call_expression") return;
-
-    const firstChild = node.namedChild(0);
-    if (!firstChild) return;
-
-    if (firstChild.type === "navigation_expression") {
-      const parts = firstChild.namedChildren;
-      if (parts.length >= 2) {
-        const receiver = nodeText(parts[0], source);
-        calls.push({
-          receiver,
-          receiverKind: classifyReceiver(receiver),
-          methodName: nodeText(parts[parts.length - 1], source),
-          argCount: kotlinArgCount(node),
-          line: node.startPosition.row + 1,
-          startIndex: node.startIndex,
-        });
-      }
-    } else if (firstChild.type === "identifier") {
-      calls.push({
-        receiver: null,
-        receiverKind: "none",
-        methodName: nodeText(firstChild, source),
-        argCount: kotlinArgCount(node),
-        line: node.startPosition.row + 1,
-        startIndex: node.startIndex,
-      });
-    }
-  });
-}
-
-function isComment(node: SyntaxNode): boolean {
-  return node.type === "line_comment" || node.type === "block_comment";
+  return typeList.namedChildren
+    .map((child: SyntaxNode) => normalizeTypeName(nodeText(child, source)))
+    .filter((name: string | null): name is string => name !== null);
 }
 
 /**
- * Count a Kotlin call's arguments. The grammar parses `f(1) { … }` as an outer
- * call_expression wrapping `f(1)` with the annotated_lambda as its suffix, so the
- * trailing lambda is found on the parent; `f { … }` carries it directly.
+ * The container symbol declared by `node`. By source range: matching by name credited a
+ * nested class's clause to the first container of that name in the file.
  */
-function kotlinArgCount(call: SyntaxNode): number | null {
-  let count = 0;
-  for (const child of call.namedChildren) {
-    if (child.type === "annotated_lambda") count++;
-    if (child.type !== "value_arguments") continue;
-    for (const arg of child.namedChildren) {
-      if (arg.type !== "value_argument") continue;
-      const named = arg.children.some((c: SyntaxNode) => c.type === "=");
-      const spread = arg.namedChildren.some((c: SyntaxNode) => c.type === "spread_expression");
-      if (named || spread) return null;
-      count++;
-    }
-  }
-  const parent = call.parent;
-  if (
-    parent?.type === "call_expression" &&
-    parent.namedChild(0)?.id === call.id &&
-    parent.namedChildren.length === 2 &&
-    parent.namedChild(1)?.type === "annotated_lambda"
-  ) {
-    count++;
-  }
-  return count;
+function declaringSymbolIndex(extraction: ExtractionResult, node: SyntaxNode): number {
+  return extraction.symbols.findIndex(
+    (s) => CONTAINER_KINDS.has(s.kind) && s.startIndex === node.startIndex && s.endIndex === node.endIndex,
+  );
 }
+
+// ── Kotlin ──
 
 function extractKotlinInheritance(
   root: SyntaxNode,
@@ -266,13 +144,7 @@ function extractKotlinInheritance(
     if (node.type !== "class_declaration" && node.type !== "object_declaration"
       && node.type !== "interface_declaration") return;
 
-    const nameNode = node.childForFieldName("name");
-    if (!nameNode) return;
-    const className = nodeText(nameNode, source);
-
-    const symbolIndex = extraction.symbols.findIndex(
-      (s) => s.name === className && CONTAINER_KINDS.has(s.kind),
-    );
+    const symbolIndex = declaringSymbolIndex(extraction, node);
     if (symbolIndex < 0) return;
 
     const delegationSpecs = findNamedChild(node, "delegation_specifiers");
@@ -287,13 +159,11 @@ function extractKotlinInheritance(
 
       if (firstChild.type === "constructor_invocation") {
         const userType = findNamedChild(firstChild, "user_type");
-        if (userType) {
-          const typeName = nodeText(findNamedChild(userType, "identifier") ?? userType, source);
-          inheritance.push({ kind: "extends", typeName, symbolIndex });
-        }
+        const typeName = userType && normalizeTypeName(nodeText(userType, source));
+        if (typeName) inheritance.push({ kind: "extends", typeName, symbolIndex });
       } else if (firstChild.type === "user_type") {
-        const typeName = nodeText(findNamedChild(firstChild, "identifier") ?? firstChild, source);
-        inheritance.push({ kind: "implements", typeName, symbolIndex });
+        const typeName = normalizeTypeName(nodeText(firstChild, source));
+        if (typeName) inheritance.push({ kind: "implements", typeName, symbolIndex });
       }
     }
   });

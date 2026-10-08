@@ -200,6 +200,12 @@ index 1234567..89abcde 100644
     expect(filesObject(diff)).toEqual({ "Å b.kt": [1, 2] });
   });
 
+  // Captured from git 2.x for a file named "trail ": only the TAB goes, the space is the name's.
+  test("path ending in a space keeps the space when its TAB is dropped", () => {
+    const diff = ["diff --git a/trail  b/trail ", "--- a/trail \t", "+++ b/trail \t", "@@ -1 +1 @@", "-a", "+b"].join("\n");
+    expect(filesObject(diff)).toEqual({ "trail ": [1] });
+  });
+
   test("empty diff → no files", () => {
     expect(filesObject("")).toEqual({});
   });

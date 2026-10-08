@@ -7,7 +7,7 @@ import { storeCallGraph, rebuildEdges } from "./edge-resolver.ts";
 import { embedSymbols } from "./embedder.ts";
 import { warmupEmbeddings } from "../embeddings.ts";
 import { upsertRepo, updateRepoCommit, updateRepoExtractorVersion } from "../db/repos.ts";
-import { ensureFile, markFileIndexed, deleteFileData, deleteStaleFiles } from "../db/files.ts";
+import { ensureFile, markFileIndexed, deleteFileData, deleteStaleFiles, setFilePackages } from "../db/files.ts";
 import { insertSymbolsBatch, updateSymbolParents, getRepoSymbolCount } from "../db/symbols.ts";
 import { sql } from "../db/connection.ts";
 import type { RepoConfig } from "../config.ts";
@@ -17,7 +17,7 @@ import type { RepoConfig } from "../config.ts";
  * differing ci_repos.extractor_version re-extracts every file (content hashes alone don't).
  * The check is equality only: an older binary on a DB stamped with its version skips call sites.
  */
-export const EXTRACTOR_VERSION = 2;
+export const EXTRACTOR_VERSION = 5;
 
 /**
  * Whether a repo's stored extractor version forces a full re-extract. NULL (never gated)
@@ -125,6 +125,7 @@ export async function indexRepo(
   // Files whose content_hash is written only after Phase 2, so an interrupted run
   // re-processes them instead of skipping them as symbol-less (see ensureFile).
   const pendingHashMarks: { fileId: string; language: string; contentHash: string }[] = [];
+  const packages: { fileId: string; packageName: string | null }[] = [];
 
   for (const file of files) {
     const { id: fileId, changed } = await ensureFile(
@@ -147,6 +148,7 @@ export async function indexRepo(
     try {
       const extraction = extractSymbols(source, tree, file.language, language);
       const qualifiedNames = buildQualifiedNames(extraction);
+      packages.push({ fileId, packageName: extraction.packageName });
 
       // Insert symbols
       const inserts = toSymbolInserts(
@@ -180,6 +182,8 @@ export async function indexRepo(
 
   // ── Phase 2: Resolve edges (imports, calls, inheritance) ──
   let totalEdges = 0;
+
+  await setFilePackages(packages);
 
   if (changedFiles > 0 || staleCount > 0) {
     // Delete old import edges and re-resolve

@@ -26,6 +26,8 @@ export interface FixtureEdge {
   target: string;
   kind: string;
   line: number | null;
+  /** ci_edges.resolution: local | static | typed for calls, null otherwise. */
+  resolution: string | null;
   sourceLine: number;
   targetLine: number;
   targetPath: string;
@@ -83,7 +85,7 @@ export async function createFixtureRepo(
       const sourceFilter = filter.source ? sql`AND src.qualified_name = ${filter.source}` : sql``;
       const targetFilter = filter.target ? sql`AND tgt.qualified_name = ${filter.target}` : sql``;
       return sql<FixtureEdge[]>`
-        SELECT src.qualified_name AS source, tgt.qualified_name AS target, e.kind, e.line,
+        SELECT src.qualified_name AS source, tgt.qualified_name AS target, e.kind, e.line, e.resolution,
           src.start_line AS "sourceLine", tgt.start_line AS "targetLine", tf.path AS "targetPath"
         FROM ci_edges e
         JOIN ci_symbols src ON src.id = e.source_id

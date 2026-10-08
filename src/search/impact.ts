@@ -1,5 +1,5 @@
 import { findSymbolByQualifiedName, getSymbolById, type CiSymbol } from "../db/symbols.ts";
-import { getImpact as getImpactEdges } from "../db/edges.ts";
+import { getImpact as getImpactEdges, type EdgeResolution } from "../db/edges.ts";
 import { timed, type ImpactTracer } from "../tracing/trace.ts";
 import { classifyArchetype, filterByArchetypeExclude, type Archetype } from "./archetype.ts";
 
@@ -25,6 +25,8 @@ export interface ImpactEntry {
   repo_name: string;
   depth: number;
   edge_kind: string;
+  /** How the edge that reached this entry was resolved; null for extends/implements/imports. */
+  resolution: EdgeResolution | null;
   confidence: number;
   archetype: Archetype;
 }
@@ -129,6 +131,7 @@ async function impactForTarget(
     repo_name: r.repo_name,
     depth: r.depth,
     edge_kind: r.edge_kind,
+    resolution: r.resolution,
     confidence: confidenceScore(r.depth, r.edge_kind),
     archetype: classifyArchetype(r),
   }));
@@ -161,6 +164,7 @@ async function impactForTarget(
         qualifiedName: a.qualified_name,
         kind: a.kind,
         depth: a.depth,
+        resolution: a.resolution,
         confidence: a.confidence,
       })),
     );
