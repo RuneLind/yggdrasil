@@ -211,7 +211,7 @@ index 1234567..89abcde 100644
   });
 });
 
-/** Base side (D1): old-side ranges keyed on the `---` path, for an index of the diff's base. */
+/** Base side: old-side ranges keyed on the `---` path, for an index of the diff's base. */
 function baseObject(diff: string): Record<string, [number, number][]> {
   const { baseFiles } = parseGitDiff(diff);
   const out: Record<string, [number, number][]> = {};
@@ -304,6 +304,22 @@ diff --git a/src/Keep.java b/src/Keep.java
 -a
 +b`;
     expect(baseObject(diff)).toEqual({ "src/Keep.java": [[2, 2]] });
+  });
+
+  test("insertion-only hunk keeps its inserted text; other hunks carry none", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -3 +3 @@
+-a
++b
+@@ -49,0 +50,2 @@
++    @Deprecated("x")
++    @Suppress("y")
+\\ No newline at end of file`;
+    const ranges = parseGitDiff(diff).baseFiles.get("src/A.kt")!;
+    expect(ranges[0].inserted).toBeUndefined();
+    expect(ranges[1]).toEqual({ start: 50, end: 49, inserted: ['    @Deprecated("x")', '    @Suppress("y")'] });
   });
 
   test("deleted file (+++ /dev/null) → old path, old-side range", () => {

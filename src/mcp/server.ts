@@ -86,6 +86,25 @@ export function globToLike(glob: string): string {
     .replace(/\x00+/g, "%")      // collapse runs of wildcards to one %
     .replace(/\?/g, "_");        // ? → single char
 }
+/**
+ * The detect_changes tool body. A bad ref or failed git command comes back as an MCP
+ * error, with the server's absolute repo path replaced by the repo name.
+ */
+export async function detectChangesTool(
+  args: { repo: string; ref?: string; side?: "base" | "head" },
+  tracer?: DetectChangesTracer,
+) {
+  try {
+    const result = await detectChanges(args.repo, { ref: args.ref, side: args.side, tracer });
+    if (!result) return textResponse(`Repository not found: ${args.repo}` + maybeAppendTracePointer(tracer));
+    return jsonResponseWithTrace(result, tracer);
+  } catch (err) {
+    if (!(err instanceof DetectChangesError)) throw err;
+    const message = err.repoPath ? err.message.replaceAll(err.repoPath, args.repo) : err.message;
+    return { ...textResponse(message + maybeAppendTracePointer(tracer)), isError: true };
+  }
+}
+
 const TOOL_COUNT = 10;
 
 function jsonResponse(data: unknown) {
@@ -193,29 +212,22 @@ server.tool(
   "detect_changes",
   "Given a git diff or commit range, identify which symbols changed and what calls them. " +
     "For a PR review, index the PR's base and pass ref 'base...head': the old-side hunk lines are matched against the base's symbols, so you get the callers of what the PR changes (side 'base'). " +
-    "A class is left out of changedSymbols (listed in droppedContainers) when one of its methods changed. " +
-    "affectedSymbols carry edge_kind and resolution; calls/overrides sort above imports. Check `warnings` for an index at the wrong commit.",
+    "A class is left out of changedSymbols (listed in droppedContainers) when every change inside it lies in its methods; a header, constructor or field change keeps it. " +
+    "affectedSymbols carry edge_kind, resolution and changed_symbols (every changed symbol that reaches the entry); calls/overrides sort above imports. Check `warnings` for an index at the wrong commit.",
   {
     repo: z.string().describe("Repository name"),
-    ref: z.string().optional().describe("Git ref or range: 'a...b' (base = merge-base), 'a..b' (base = a), 'a' (a vs working tree). Default: uncommitted changes"),
+    ref: z
+      .string()
+      .optional()
+      .describe("Git ref or range: 'a...b' (base = merge-base), 'a..b' (base = a), 'X^!' (X's parent vs X), 'a' (a vs working tree). Default: working tree vs HEAD, staged and unstaged"),
     side: z
       .enum(["base", "head"])
       .optional()
-      .describe("Which side of the diff the index holds. Default: 'base' when a ref is given and the index's last commit is the diff's base, else 'head'"),
+      .describe("Which side of the diff the index holds. Default: 'base' for a two-sided ref (a..b, a...b, X^!) when the index's last commit is the diff's base, else 'head'"),
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
-  async ({ repo, ref, side, trace }) => {
-    const tracer = gateTracer(trace, () => new DetectChangesTracer());
-    let result;
-    try {
-      result = await detectChanges(repo, { ref, side, tracer });
-    } catch (err) {
-      if (err instanceof DetectChangesError) return textResponse(err.message + maybeAppendTracePointer(tracer));
-      throw err;
-    }
-    if (!result) return textResponse(`Repository not found: ${repo}` + maybeAppendTracePointer(tracer));
-    return jsonResponseWithTrace(result, tracer);
-  },
+  async ({ repo, ref, side, trace }) =>
+    detectChangesTool({ repo, ref, side }, gateTracer(trace, () => new DetectChangesTracer())),
 );
 
 server.tool(

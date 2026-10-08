@@ -2,27 +2,20 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { git } from "./helpers/git.ts";
 import { resolveDiffSides } from "../src/search/detect-changes.ts";
 
 /**
- * Base/head resolution per ref form (D1), against a throwaway git repo:
+ * Base/head resolution per ref form, against a throwaway git repo:
  *
- *   c0 ── c1 (main)
- *     └── c2 (feature)
+ *   c0 ── c1 (main) ── m (merged: merge of feature, first parent c1)
+ *     └── c2 (feature) ──┘
  *
  * so the merge-base of main...feature (c0) differs from both sides.
  */
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const isolated = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
-  const proc = Bun.spawn(["git", ...isolated, ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  const out = await new Response(proc.stdout).text();
-  if ((await proc.exited) !== 0) throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`);
-  return out.trim();
-}
-
 describe("resolveDiffSides", () => {
   let dir: string;
-  let c0: string, c1: string, c2: string;
+  let c0: string, c1: string, c2: string, m: string;
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "yggdrasil-refs-"));
@@ -33,12 +26,16 @@ describe("resolveDiffSides", () => {
     c0 = await git(dir, "rev-parse", "HEAD");
     await git(dir, "checkout", "-q", "-b", "feature");
     await writeFile(join(dir, "a.txt"), "2\n");
-    await git(dir, "commit", "-q", "-am", "c2");
+    await git(dir, "commit", "-q", "-am", "c2 feature-commit");
     c2 = await git(dir, "rev-parse", "HEAD");
     await git(dir, "checkout", "-q", "main");
     await writeFile(join(dir, "a.txt"), "1\n");
     await git(dir, "commit", "-q", "-am", "c1");
     c1 = await git(dir, "rev-parse", "HEAD");
+    await git(dir, "checkout", "-q", "-b", "merged");
+    await git(dir, "merge", "-q", "-s", "ours", "-m", "m", "feature");
+    m = await git(dir, "rev-parse", "HEAD");
+    await git(dir, "checkout", "-q", "main");
   });
 
   afterAll(async () => {
@@ -74,9 +71,48 @@ describe("resolveDiffSides", () => {
     }
   });
 
+  test("X^! → X's first parent against X", async () => {
+    expect(await resolveDiffSides(dir, "feature^!")).toEqual({ base: c0, head: c2 });
+    expect(await resolveDiffSides(dir, "merged^!")).toEqual({ base: c1, head: m });
+  });
+
+  test("X^- and X^-n → X's n-th parent (default 1) against X", async () => {
+    expect(await resolveDiffSides(dir, "merged^-")).toEqual({ base: c1, head: m });
+    expect(await resolveDiffSides(dir, "merged^-1")).toEqual({ base: c1, head: m });
+    expect(await resolveDiffSides(dir, "merged^-2")).toEqual({ base: c2, head: m });
+  });
+
+  test(":/text resolves as a single ref, even when the text holds '..'", async () => {
+    expect(await resolveDiffSides(dir, ":/feature-commit")).toEqual({ base: c2, head: null });
+    await git(dir, "commit", "-q", "--allow-empty", "-m", "fix a..b parsing");
+    try {
+      const fix = await git(dir, "rev-parse", "HEAD");
+      expect(await resolveDiffSides(dir, ":/fix a..b")).toEqual({ base: fix, head: null });
+    } finally {
+      await git(dir, "reset", "-q", "--hard", c1);
+    }
+  });
+
   test("a ref that does not exist → throws, naming the ref", async () => {
     await expect(resolveDiffSides(dir, "no-such-ref")).rejects.toThrow(/no-such-ref/);
     await expect(resolveDiffSides(dir, "main...no-such-ref")).rejects.toThrow(/no-such-ref/);
     await expect(resolveDiffSides(dir, "no-such-ref..main")).rejects.toThrow(/no-such-ref/);
+  });
+
+  test("flag-style refs are rejected", async () => {
+    for (const flag of ["--cached", "--staged", "-R", "--output=/tmp/x"]) {
+      await expect(resolveDiffSides(dir, flag)).rejects.toThrow(/not a revision/);
+    }
+  });
+
+  test("a repo without commits and no ref → base is the empty tree", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "yggdrasil-unborn-"));
+    try {
+      await git(empty, "init", "-q");
+      const emptyTree = await git(empty, "hash-object", "-t", "tree", "/dev/null");
+      expect(await resolveDiffSides(empty)).toEqual({ base: emptyTree, head: null });
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
   });
 });

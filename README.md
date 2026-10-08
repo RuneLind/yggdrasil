@@ -190,21 +190,25 @@ For a PR review, index the PR's base and pass `ref: "<base>...<head>"`. The call
 
 | `ref` | Base | Head |
 |---|---|---|
-| none | `HEAD` | working tree |
-| `a` | `a` | working tree |
+| none | `HEAD` (the empty tree in a repo without commits) | working tree, staged and unstaged |
+| `a` or `:/text` | `a` | working tree |
 | `a..b` | `a` | `b` |
 | `a...b` | `git merge-base a b` | `b` |
+| `X^!` | `X^` | `X` |
+| `X^-n` | `X^n` (`n` defaults to 1) | `X` |
 
-An omitted side of a range is `HEAD`. A ref that git cannot resolve returns an error.
+An omitted side of a range is `HEAD`. A ref that git cannot resolve returns an error, and so does a flag-style ref such as `--cached` or `-R`. Renames are always detected, whatever `diff.renames` says.
 
 `side` selects which hunk lines are matched against the index:
 
-- `base` (review mode): old-side ranges, keyed on the `---` path. Renames resolve on the old path; added files have no base symbols. An insertion-only hunk (`@@ -N,0 …`) flags a symbol only when it contains both line N and line N+1, so code inserted inside a method body flags that method, and code inserted between two methods flags neither.
-- `head`: new-side lines, keyed on the `+++` path (the earlier behavior).
+- `base` (review mode): old-side ranges, keyed on the `---` path. Renames resolve on the old path; added files have no base symbols. An insertion-only hunk (`@@ -N,0 …`) flags a symbol only when it contains both line N and line N+1, so code inserted inside a method body flags that method, and code inserted between two methods flags neither. The exception is an insertion made only of annotation lines (each starts with `@`) directly above a symbol, which flags that symbol.
+- `head`: new-side lines, keyed on the `+++` path.
 
-When you omit `side`, it is `base` if you pass a `ref` and `ci_repos.last_commit` equals the resolved base, otherwise `head`. `warnings` reports an index whose commit differs from the side being matched.
+When you omit `side`, it is `base` for a two-sided ref (`a..b`, `a...b`, `X^!`, `X^-n`) when `ci_repos.last_commit` equals the resolved base, otherwise `head`. A single ref or no ref diffs against the working tree, which is what the index reads, so it stays `head`. `warnings` reports an index whose commit differs from the side being matched; a working-tree head never warns.
 
-A class, interface, enum or object is moved from `changedSymbols` to `droppedContainers` when one of its non-field members also changed. It stays when only its header or fields changed. Each changed symbol's blast radius is computed by id, so overloads do not share callers.
+A class, interface, enum or object moves from `changedSymbols` to `droppedContainers` when every change inside it lies within its non-field members. It stays when a change touches its header, primary constructor, a field, or the lines between members. A `val` or field declared inside a method, function or constructor is not reported as a changed symbol.
+
+Each changed symbol's blast radius is computed by id, so overloads do not share callers. An affected symbol reached from several changed symbols appears once: it keeps the best edge (calls and overrides above imports, then confidence, then depth), and `changed_symbols` lists every changed symbol that reaches it.
 
 ### Search algorithm
 

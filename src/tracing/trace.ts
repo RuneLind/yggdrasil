@@ -277,7 +277,7 @@ export interface TraceDetectChangesV1 {
   warnings?: string[];
   diff: { fileCount: number; addedLines: number; removedLines: number };
   symbolsExtracted: Array<{ file: string; symbolCount: number }>;
-  /** Containers dropped from the changed set because a member of theirs changed. */
+  /** Containers dropped from the changed set because every change inside them lies in a member. */
   droppedContainers?: string[];
   impactExpansion: Array<{
     symbolId: string;

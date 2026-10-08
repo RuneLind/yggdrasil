@@ -2,21 +2,22 @@ import { describe, test, expect } from "bun:test";
 import { gitDiffArgs } from "../src/search/detect-changes.ts";
 
 /**
- * Pins `-c core.quotePath=false`: parseGitDiff's unquote fallback makes dropping the
- * flag invisible to every end-to-end test, so only the argument list can catch it.
+ * Pins the `git diff` argv. Each flag overrides a user or repo config that would
+ * otherwise change the output: quoted paths (core.quotePath; parseGitDiff's unquote
+ * fallback hides its loss end to end), missing a/ b/ prefixes (diff.noprefix,
+ * diff.mnemonicPrefix), textconv and external diff drivers, and diff.renames=false.
  */
 describe("gitDiffArgs", () => {
-  for (const ref of [undefined, "HEAD~1"]) {
-    test(`sets core.quotePath=false before the diff subcommand (ref=${ref ?? "none"})`, () => {
-      const args = gitDiffArgs(ref);
-      const diffAt = args.indexOf("diff");
-      const flagAt = args.indexOf("core.quotePath=false");
-      expect(args[0]).toBe("git");
-      expect(diffAt).toBeGreaterThan(0);
-      expect(flagAt).toBeGreaterThan(0);
-      expect(flagAt).toBeLessThan(diffAt);
-      expect(args[flagAt - 1]).toBe("-c");
-      if (ref) expect(args.slice(diffAt + 1)).toContain(ref);
-    });
-  }
+  test("pins config-independent output flags and ends options before the revisions", () => {
+    expect(gitDiffArgs(["abc"])).toEqual([
+      "git", "-c", "core.quotePath=false", "diff",
+      "--unified=0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+      "--no-textconv", "--no-ext-diff", "-M",
+      "--end-of-options", "abc", "--",
+    ]);
+  });
+
+  test("passes both sides of a two-sided diff in order", () => {
+    expect(gitDiffArgs(["base", "head"]).slice(-4)).toEqual(["--end-of-options", "base", "head", "--"]);
+  });
 });

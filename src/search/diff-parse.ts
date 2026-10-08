@@ -2,9 +2,11 @@
  * Pure parser for `git diff --unified=0` output. Kept free of I/O so it can be
  * table-driven over fixture diff text without spawning git or touching a DB.
  *
- * Produces, per changed file, the set of line numbers a change touched, plus the
- * running added/removed totals. Those line ranges are later intersected with the
- * indexed symbols' [start_line, end_line] to find which symbols a change hit.
+ * Produces, per changed file, the line numbers a change touched on each side: new-side
+ * lines keyed on the new path (`files`, matched against an index of the diff's head) and
+ * one old-side range per hunk keyed on the old path (`baseFiles`, matched against an
+ * index of the base), plus the added/removed totals. detect-changes intersects them with
+ * the indexed symbols' [start_line, end_line] to find which symbols a change hit.
  */
 
 /**
@@ -18,14 +20,19 @@ export interface LineRange {
   end: number;
 }
 
+/** An old-side hunk range; an insertion-only hunk also keeps its inserted (new-side) lines. */
+export interface BaseRange extends LineRange {
+  inserted?: string[];
+}
+
 export interface DiffSummary {
   /** Head side: new path → touched new-side lines (old-side for pure deletions). */
   files: Map<string, Set<number>>;
   /**
-   * Base side (review mode): old path → one old-side range per hunk. Added files
+   * Base side: old path → one old-side range per hunk. Added files
    * (`--- /dev/null`) are absent, since an index of the base holds no symbols for them.
    */
-  baseFiles: Map<string, LineRange[]>;
+  baseFiles: Map<string, BaseRange[]>;
   addedLines: number;
   removedLines: number;
 }
@@ -100,7 +107,7 @@ function headerPath(raw: string): string {
  */
 export function parseGitDiff(text: string): DiffSummary {
   const files = new Map<string, Set<number>>();
-  const baseFiles = new Map<string, LineRange[]>();
+  const baseFiles = new Map<string, BaseRange[]>();
   let addedLines = 0;
   let removedLines = 0;
 
@@ -108,10 +115,12 @@ export function parseGitDiff(text: string): DiffSummary {
   let currentOldFile: string | null = null;
   let pendingOldFile: string | null = null;
   let inHeader = false;
+  let inserting: string[] | null = null;
 
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
       inHeader = true;
+      inserting = null;
       currentFile = null;
       currentOldFile = null;
       pendingOldFile = null;
@@ -134,7 +143,13 @@ export function parseGitDiff(text: string): DiffSummary {
       continue;
     }
 
+    if (inserting && line.startsWith("+")) {
+      inserting.push(line.slice(1));
+      continue;
+    }
+
     if (line.startsWith("@@ ") && currentFile) {
+      inserting = null;
       // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@  (counts default to 1)
       const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!match) continue;
@@ -156,7 +171,9 @@ export function parseGitDiff(text: string): DiffSummary {
       if (currentOldFile) {
         // git writes an empty old side as `-N,0`: zero lines *after* line N.
         const start = removed === 0 ? removedStart + 1 : removedStart;
-        baseFiles.get(currentOldFile)!.push({ start, end: start + removed - 1 });
+        const range: BaseRange = { start, end: start + removed - 1 };
+        if (removed === 0) inserting = range.inserted = [];
+        baseFiles.get(currentOldFile)!.push(range);
       }
     }
   }
