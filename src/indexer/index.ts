@@ -17,7 +17,7 @@ import type { RepoConfig } from "../config.ts";
  * differing ci_repos.extractor_version re-extracts every file (content hashes alone don't).
  * The check is equality only: an older binary on a DB stamped with its version skips call sites.
  */
-export const EXTRACTOR_VERSION = 5;
+export const EXTRACTOR_VERSION = 6;
 
 /**
  * Whether a repo's stored extractor version forces a full re-extract. NULL (never gated)
@@ -198,9 +198,9 @@ export async function indexRepo(
     // edges from unchanged files into a changed file cascaded away with its symbols.
     const rebuildStart = performance.now();
     const rebuilt = await rebuildEdges(repo.id);
-    totalEdges += rebuilt.inheritanceEdges + rebuilt.callEdges;
+    totalEdges += rebuilt.inheritanceEdges + rebuilt.overrideEdges + rebuilt.callEdges;
     console.log(
-      `[yggdrasil] Rebuilt ${rebuilt.inheritanceEdges} inheritance + ${rebuilt.callEdges} call edges (whole repo) in ${Math.round(performance.now() - rebuildStart)}ms`,
+      `[yggdrasil] Rebuilt ${rebuilt.inheritanceEdges} inheritance + ${rebuilt.overrideEdges} overrides + ${rebuilt.callEdges} call edges (whole repo) in ${Math.round(performance.now() - rebuildStart)}ms`,
     );
 
     if (totalEdges > 0) {

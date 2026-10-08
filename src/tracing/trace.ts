@@ -140,8 +140,12 @@ export interface TraceImpactV1 {
     qualifiedName: string;
     kind: string;
     depth: number;
-    /** ci_edges.resolution of the edge that reached it: local | static | typed, null otherwise. */
+    /** ci_edges.kind of the edge that reached it: calls, overrides, extends, implements, imports. */
+    edgeKind: string;
+    /** ci_edges.resolution of the edge that reached it: local | static | typed | chain, null otherwise. */
     resolution: string | null;
+    /** Qualified name of the overridden method a dispatched call went through, else null. */
+    via: string | null;
     confidence: number;
   }>;
   timingsMs: Partial<Record<TraceImpactTiming, number>> & { total: number };

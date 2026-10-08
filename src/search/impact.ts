@@ -27,6 +27,12 @@ export interface ImpactEntry {
   edge_kind: string;
   /** How the edge that reached this entry was resolved; null for extends/implements/imports. */
   resolution: EdgeResolution | null;
+  /**
+   * The ancestor method this entry's call went through: it calls `via`, which the
+   * changed method (or a symbol on its path) overrides. Null for a direct edge.
+   */
+  via: string | null;
+  via_id: string | null;
   confidence: number;
   archetype: Archetype;
 }
@@ -132,6 +138,8 @@ async function impactForTarget(
     depth: r.depth,
     edge_kind: r.edge_kind,
     resolution: r.resolution,
+    via: r.via,
+    via_id: r.via_id,
     confidence: confidenceScore(r.depth, r.edge_kind),
     archetype: classifyArchetype(r),
   }));
@@ -164,7 +172,9 @@ async function impactForTarget(
         qualifiedName: a.qualified_name,
         kind: a.kind,
         depth: a.depth,
+        edgeKind: a.edge_kind,
         resolution: a.resolution,
+        via: a.via,
         confidence: a.confidence,
       })),
     );

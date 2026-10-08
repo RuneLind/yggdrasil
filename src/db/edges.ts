@@ -1,6 +1,6 @@
 import { sql } from "./connection.ts";
 
-export type EdgeKind = "calls" | "extends" | "implements" | "imports";
+export type EdgeKind = "calls" | "extends" | "implements" | "imports" | "overrides";
 
 export interface CiEdge {
   id: string;
@@ -12,7 +12,7 @@ export interface CiEdge {
 }
 
 /** How a calls edge was resolved (see rebuildEdges); null for other edge kinds. */
-export type EdgeResolution = "local" | "static" | "typed";
+export type EdgeResolution = "local" | "static" | "typed" | "chain";
 
 export interface EdgeInsert {
   source_id: string;
@@ -78,42 +78,71 @@ export async function getOutgoingEdges(symbolId: string): Promise<EdgeNeighbor[]
   `;
 }
 
-/** Blast radius — transitive closure of incoming edges up to maxDepth */
-export async function getImpact(
-  symbolId: string,
-  maxDepth = 3,
-): Promise<{ id: string; name: string; qualified_name: string; kind: string; file_path: string; repo_name: string; depth: number; edge_kind: string; resolution: EdgeResolution | null }[]> {
-  return sql`
+export interface ImpactRow {
+  id: string;
+  name: string;
+  qualified_name: string;
+  kind: string;
+  file_path: string;
+  repo_name: string;
+  depth: number;
+  edge_kind: string;
+  resolution: EdgeResolution | null;
+  /** The ancestor method a dispatched call went through (see getImpact); null otherwise. */
+  via_id: string | null;
+  via: string | null;
+}
+
+/**
+ * Blast radius: incoming edges, transitively, up to maxDepth hops. Direct callers are at
+ * depth 1 (the changed symbol itself is depth 0 and never listed).
+ *
+ * Dispatch: at each step the reached symbol also stands for every ancestor method it
+ * overrides, whose incoming `calls` edges count as if they pointed at it, with `via` set
+ * to that ancestor. Overrides edges run from each method to every ancestor declaration,
+ * so this is one hop. Incoming `overrides` edges are ordinary edges: impact of an
+ * interface method lists each implementation with edge_kind `overrides`.
+ *
+ * PostgreSQL allows one recursive reference, so the dispatch step is a LATERAL inside the
+ * recursive term. The join stays an equality on target_id, which keeps
+ * idx_ci_edges_target; an `OR target_id IN (…)` join measured 756 ms against 1.2 ms
+ * (ÅrsavregningService class seed, depth 3, melosys-api).
+ */
+export async function getImpact(symbolId: string, maxDepth = 3): Promise<ImpactRow[]> {
+  return sql<ImpactRow[]>`
     WITH RECURSIVE impact AS (
-      -- Direct callers seed at depth 1 (depth 0 is the changed symbol itself), and
-      -- recursing WHERE i.depth < maxDepth yields hops 1..maxDepth — i.e. exactly
-      -- maxDepth hops of callers. (The old seed of 0 yielded 0..maxDepth: one hop too
-      -- deep, and it scored direct callers 1.0 — indistinguishable from the changed
-      -- symbol itself. This change is intentionally both a relabel *and* a one-hop
-      -- reach correction, so maxDepth now means precisely that many caller hops.)
-      SELECT
-        s.id, s.name, s.qualified_name, s.kind,
-        f.path as file_path, r.name as repo_name,
-        1 as depth, e.kind as edge_kind, e.resolution
-      FROM ci_edges e
-      JOIN ci_symbols s ON s.id = e.source_id
-      JOIN ci_files f ON f.id = s.file_id
-      JOIN ci_repos r ON r.id = f.repo_id
-      WHERE e.target_id = ${symbolId}
+      SELECT e.source_id AS id, 1 AS depth, e.kind AS edge_kind, e.resolution,
+        CASE WHEN t.via THEN t.tid END AS via_id
+      FROM (
+        SELECT ${symbolId}::uuid AS tid, false AS via
+        UNION ALL
+        SELECT o.target_id, true FROM ci_edges o WHERE o.kind = 'overrides' AND o.source_id = ${symbolId}
+      ) t
+      JOIN ci_edges e ON e.target_id = t.tid AND (NOT t.via OR e.kind = 'calls')
 
       UNION
 
-      SELECT
-        s.id, s.name, s.qualified_name, s.kind,
-        f.path as file_path, r.name as repo_name,
-        i.depth + 1, e.kind as edge_kind, e.resolution
-      FROM ci_edges e
-      JOIN ci_symbols s ON s.id = e.source_id
-      JOIN ci_files f ON f.id = s.file_id
-      JOIN ci_repos r ON r.id = f.repo_id
-      JOIN impact i ON e.target_id = i.id
+      SELECT e.source_id, i.depth + 1, e.kind, e.resolution, CASE WHEN t.via THEN t.tid END
+      FROM impact i
+      CROSS JOIN LATERAL (
+        SELECT i.id AS tid, false AS via
+        UNION ALL
+        SELECT o.target_id, true FROM ci_edges o WHERE o.kind = 'overrides' AND o.source_id = i.id
+      ) t
+      JOIN ci_edges e ON e.target_id = t.tid AND (NOT t.via OR e.kind = 'calls')
       WHERE i.depth < ${maxDepth}
+    ),
+    shallowest AS (
+      SELECT DISTINCT ON (id) * FROM impact
+      ORDER BY id, depth, (via_id IS NOT NULL), edge_kind, resolution
     )
-    SELECT DISTINCT ON (id) * FROM impact ORDER BY id, depth, edge_kind, resolution
+    SELECT s.id, s.name, s.qualified_name, s.kind, f.path AS file_path, r.name AS repo_name,
+      i.depth, i.edge_kind, i.resolution, i.via_id, v.qualified_name AS via
+    FROM shallowest i
+    JOIN ci_symbols s ON s.id = i.id
+    JOIN ci_files f ON f.id = s.file_id
+    JOIN ci_repos r ON r.id = f.repo_id
+    LEFT JOIN ci_symbols v ON v.id = i.via_id
+    ORDER BY s.id
   `;
 }

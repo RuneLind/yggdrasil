@@ -48,12 +48,20 @@ export async function storeCallGraph(
   callGraph: CallGraphResult,
   symbolDbIds: string[],
 ): Promise<void> {
-  const callRows = [];
-  for (const call of callGraph.calls) {
+  // Ids are assigned here so a call can point at its receiver step's row.
+  const siteIds = callGraph.calls.map((call) => {
     const owner = outermostCallableIndex(symbols, call.startIndex);
     const sourceId = owner === null ? undefined : symbolDbIds[owner];
-    if (!sourceId) continue;
+    return sourceId ? { id: crypto.randomUUID(), sourceId } : null;
+  });
+  const callRows = [];
+  for (let i = 0; i < callGraph.calls.length; i++) {
+    const call = callGraph.calls[i];
+    const site = siteIds[i];
+    if (!site) continue;
+    const sourceId = site.sourceId;
     callRows.push({
+      id: site.id,
       file_id: fileId,
       source_symbol_id: sourceId,
       receiver: call.receiver,
@@ -64,6 +72,9 @@ export async function storeCallGraph(
       arg_types: call.argTypes,
       arg_names: call.argNames,
       implicit_receiver_type: call.implicitReceiverType,
+      receiver_site_id: call.receiverStep === null ? null : siteIds[call.receiverStep]?.id ?? null,
+      is_navigation: call.navigation,
+      receiver_declared: call.receiverDeclared,
       line: call.line,
     });
   }
@@ -86,11 +97,12 @@ export async function storeCallGraph(
 
 export interface RebuildResult {
   inheritanceEdges: number;
+  overrideEdges: number;
   callEdges: number;
 }
 
 /**
- * Delete every calls/extends/implements edge whose source is in the repo and rebuild
+ * Delete every calls/extends/implements/overrides edge whose source is in the repo and rebuild
  * them from ci_call_sites and ci_inheritance_refs, in one transaction. It reads
  * ci_import_map but not import edges, so it does not depend on resolveImports.
  *
@@ -101,7 +113,7 @@ export interface RebuildResult {
  *    name. Same-qualified-name duplicates (two Gradle modules) prefer the referring file.
  *    Inheritance clauses and extension receivers resolve first, without inherited member
  *    types (the hierarchy is built from them); call receivers resolve after.
- * 2. Inheritance edges, then the class hierarchy from them.
+ * 2. Inheritance edges, then the class hierarchy from them, then overrides edges.
  * 3. Calls. Each site looks for a method of its name in lookup classes, in groups: the
  *    receiver of an enclosing with/apply/run lambda (0); the receiver's class, or for a
  *    receiverless or `this` call the caller's class (1); for a receiverless call, each
@@ -117,8 +129,10 @@ export interface RebuildResult {
  *    class or the caller's own extension receiver, or when it is the only reachable
  *    extension of that name. Argument types then narrow same-site overloads
  *    (narrowOverloads). The resolution is `implicit`'s and the receiver rule's: typed (a
- *    variable's or lambda receiver's type), static (a class name), local (receiverless
- *    or `this`).
+ *    variable's or lambda receiver's type), static (a class name), local (receiverless,
+ *    `this` or `super`, whose lookup classes are the caller's direct supertypes).
+ * 4. Chains and inherited-property receivers, typed through a symbol's declared_type
+ *    (resolveDerivedReceivers).
  *
  * The caller itself is never a target.
  */
@@ -130,9 +144,10 @@ export async function rebuildEdges(repoId: string): Promise<RebuildResult> {
     await resolveTypeNames(tx, repoId, "declarations");
     const inheritanceEdges = await insertInheritanceEdges(tx);
     await buildHierarchy(tx);
+    const overrideEdges = await insertOverrideEdges(tx);
     await resolveTypeNames(tx, repoId, "calls");
     const callEdges = await insertCallEdges(tx, repoId);
-    return { inheritanceEdges, callEdges };
+    return { inheritanceEdges, overrideEdges, callEdges };
   });
 }
 
@@ -148,7 +163,7 @@ async function deleteResolvedEdges(tx: Tx, repoId: string): Promise<void> {
     WHERE e.source_id = s.id
       AND s.file_id = f.id
       AND f.repo_id = ${repoId}
-      AND e.kind IN ('calls', 'extends', 'implements')
+      AND e.kind IN ('calls', 'extends', 'implements', 'overrides')
   `;
 }
 
@@ -187,7 +202,7 @@ async function createWorkTables(tx: Tx, repoId: string): Promise<void> {
  * (ci_inheritance_refs.id) and ext (the extension function's symbol id); `calls`:
  * static, typed and implicit (ci_call_sites.id).
  */
-async function resolveTypeNames(tx: Tx, repoId: string, phase: "declarations" | "calls"): Promise<void> {
+async function resolveTypeNames(tx: Tx, repoId: string, phase: "declarations" | "calls" | "derived"): Promise<void> {
   // scope_id: the container whose enclosing classes' member types are in scope.
   if (phase === "declarations") {
     await tx`
@@ -202,6 +217,19 @@ async function resolveTypeNames(tx: Tx, repoId: string, phase: "declarations" | 
       SELECT 'ext', s.id, s.file_id, f.package_name, s.parent_id, s.extension_receiver
       FROM ci_symbols s JOIN ci_files f ON f.id = s.file_id
       WHERE f.repo_id = ${repoId} AND s.extension_receiver IS NOT NULL
+    `;
+  } else if (phase === "derived") {
+    // A receiver step's target or an inherited property: its declared type, read in the
+    // declaring file (its imports, package and enclosing classes), not the caller's.
+    await tx`DROP TABLE ci_tmp_type_refs`;
+    await tx`
+      CREATE TEMP TABLE ci_tmp_type_refs ON COMMIT DROP AS
+      SELECT DISTINCT 'decl'::text AS ref_kind, t.id AS ref_id, t.file_id, f.package_name,
+        t.parent_id AS scope_id, t.declared_type AS type_text
+      FROM ci_tmp_derived d
+      JOIN ci_symbols t ON t.id = d.typed_by
+      JOIN ci_files f ON f.id = t.file_id
+      WHERE t.declared_type IS NOT NULL
     `;
   } else {
     await tx`DROP TABLE ci_tmp_type_refs`;
@@ -318,6 +346,43 @@ async function buildHierarchy(tx: Tx): Promise<void> {
 
 const CALLABLES = [...CALLABLE_KINDS];
 
+/**
+ * Same signature for override purposes: equal parameter types when both are fully known,
+ * else the same parameter range. Shared by the overrides edges and the call candidates'
+ * override removal.
+ */
+function sameSignature(tx: Tx, a: string, b: string) {
+  const [x, y] = [tx(a), tx(b)];
+  return tx`CASE
+    WHEN ${x}.param_types IS NOT NULL AND ${y}.param_types IS NOT NULL
+      AND array_position(${x}.param_types, NULL) IS NULL AND array_position(${y}.param_types, NULL) IS NULL
+    THEN ${x}.param_types = ${y}.param_types
+    ELSE ${x}.min_params IS NOT DISTINCT FROM ${y}.min_params AND ${x}.max_params IS NOT DISTINCT FROM ${y}.max_params
+  END`;
+}
+
+/**
+ * An `overrides` edge from each method to every ancestor method of the same name and
+ * signature, over the whole extends/implements closure: impact's dispatch step is then
+ * one hop. Kotlin interfaces are `class` symbols, so the owner's kind is not checked.
+ * Constructors, static and private methods never override.
+ */
+async function insertOverrideEdges(tx: Tx): Promise<number> {
+  const result = await tx`
+    INSERT INTO ci_edges (source_id, target_id, kind, line)
+    SELECT DISTINCT m.id, a.id, 'overrides', NULL::int
+    FROM ci_tmp_hierarchy h
+    JOIN ci_symbols m ON m.parent_id = h.class_id
+    JOIN ci_symbols a ON a.parent_id = h.ancestor_id AND a.name = m.name
+    WHERE h.depth > 0
+      AND m.kind IN ('method', 'function') AND a.kind IN ('method', 'function')
+      AND NOT coalesce(m.is_static, false) AND NOT coalesce(a.is_static, false)
+      AND m.visibility IS DISTINCT FROM 'private' AND a.visibility IS DISTINCT FROM 'private'
+      AND ${sameSignature(tx, "m", "a")}
+  `;
+  return result.count;
+}
+
 async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
   // A NULL count (spread argument) or unknown parameters admit every overload.
   const arityFits = tx`(s.arg_count IS NULL OR t.min_params IS NULL
@@ -331,7 +396,8 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
   await tx`
     CREATE TEMP TABLE ci_tmp_sites ON COMMIT DROP AS
     SELECT cs.id, cs.source_symbol_id, cs.file_id, cs.line, cs.method_name, cs.arg_count,
-      cs.receiver_kind, src.parent_id AS caller_class_id, src.qualified_name AS caller_qn, f.package_name
+      cs.receiver_kind, cs.receiver, cs.receiver_type, cs.receiver_declared, cs.receiver_site_id, cs.is_navigation,
+      src.parent_id AS caller_class_id, src.qualified_name AS caller_qn, f.package_name
     FROM ci_call_sites cs
     JOIN ci_files f ON f.id = cs.file_id
     JOIN ci_symbols src ON src.id = cs.source_symbol_id
@@ -355,48 +421,29 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
     SELECT ref_id, CASE ref_kind WHEN 'implicit' THEN 0 ELSE 1 END, class_id,
       CASE ref_kind WHEN 'static' THEN 'static' ELSE 'typed' END
     FROM ci_tmp_type_resolved WHERE ref_kind IN ('static', 'typed', 'implicit')
+    UNION ALL
+    -- super.foo(): the caller class's direct supertypes; their hierarchies minus overridden
+    -- methods leave the nearest ancestor's foo.
+    SELECT s.id, 1, e.target_id, 'local'
+    FROM ci_tmp_sites s JOIN ci_edges e ON e.source_id = s.caller_class_id AND e.kind IN ('extends', 'implements')
+    WHERE s.receiver_kind = 'super'
   `;
   await tx`ANALYZE ci_tmp_starts (site_id, grp)`;
 
   await tx`
-    CREATE TEMP TABLE ci_tmp_cands ON COMMIT DROP AS
-    WITH member AS (
-      SELECT st.site_id, st.grp, st.resolution, h.ancestor_id AS owner_id, t.id AS target_id,
-        t.param_types, t.min_params, t.max_params
-      FROM ci_tmp_starts st
-      JOIN ci_tmp_sites s ON s.id = st.site_id
-      JOIN ci_tmp_hierarchy h ON h.class_id = st.class_id
-      JOIN ci_symbols t ON t.parent_id = h.ancestor_id AND t.name = s.method_name AND t.kind = ANY(${CALLABLES})
-      WHERE ${arityFits} AND ${visible}
-    )
-    SELECT site_id, grp, resolution, owner_id, target_id, param_types, min_params, max_params FROM member
+    CREATE TEMP TABLE ci_tmp_cands (site_id uuid, grp int, resolution text, owner_id uuid, target_id uuid,
+      param_types text[], min_params int, max_params int) ON COMMIT DROP
   `;
+  await insertMemberCandidates(tx, "ci_tmp_starts", arityFits, visible);
   await tx`CREATE INDEX ON ci_tmp_cands (site_id)`;
   await tx`ANALYZE ci_tmp_cands`;
-
-  // An override in a subclass of the owner hides the owner's method: same parameter
-  // types when both are fully known, else the same parameter range.
-  await tx`
-    DELETE FROM ci_tmp_cands a
-    USING ci_tmp_cands b, ci_tmp_hierarchy h
-    WHERE b.site_id = a.site_id AND b.grp = a.grp AND b.owner_id <> a.owner_id
-      AND h.class_id = b.owner_id AND h.ancestor_id = a.owner_id
-      AND CASE
-        WHEN a.param_types IS NOT NULL AND b.param_types IS NOT NULL
-          AND array_position(a.param_types, NULL) IS NULL AND array_position(b.param_types, NULL) IS NULL
-        THEN a.param_types = b.param_types
-        ELSE a.min_params IS NOT DISTINCT FROM b.min_params AND a.max_params IS NOT DISTINCT FROM b.max_params
-      END
-  `;
+  await removeOverridden(tx, null);
 
   await insertFunctionCandidates(tx, repoId, arityFits, visible);
-  await narrowCandidates(tx);
-  // Sites narrowCandidates left alone keep their first group.
-  await tx`
-    DELETE FROM ci_tmp_cands c
-    USING (SELECT site_id, min(grp) AS grp FROM ci_tmp_cands GROUP BY site_id) f
-    WHERE c.site_id = f.site_id AND c.grp > f.grp
-  `;
+  await narrowCandidates(tx, null);
+  await keepFirstGroup(tx);
+
+  await resolveDerivedReceivers(tx, repoId, arityFits, visible);
 
   const result = await tx`
     INSERT INTO ci_edges (source_id, target_id, kind, line, resolution)
@@ -404,12 +451,107 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
       s.source_symbol_id, c.target_id, 'calls', s.line, c.resolution
     FROM ci_tmp_cands c
     JOIN ci_tmp_sites s ON s.id = c.site_id
-    WHERE c.target_id <> s.source_symbol_id
+    WHERE c.target_id <> s.source_symbol_id AND NOT s.is_navigation
     ORDER BY s.source_symbol_id, c.target_id, s.line,
-      CASE c.resolution WHEN 'typed' THEN 0 WHEN 'static' THEN 1 ELSE 2 END
+      CASE c.resolution WHEN 'typed' THEN 0 WHEN 'static' THEN 1 WHEN 'local' THEN 2 ELSE 3 END
     ON CONFLICT (source_id, target_id, kind, line) DO NOTHING
   `;
   return result.count;
+}
+
+type Fragment = postgres.PendingQuery<postgres.Row[]>;
+
+/**
+ * Member candidates of the lookup classes in `starts` (see rebuildEdges). A navigation
+ * step `x.b` matches a member property `b` (a Kotlin property symbol that no callable of
+ * its class contains: function-local vals are stored with the class as parent) or a
+ * Java getter `getB()` without parameters (an `isB()` getter returns a boolean, which
+ * types nothing).
+ */
+async function insertMemberCandidates(tx: Tx, starts: string, arityFits: Fragment, visible: Fragment): Promise<void> {
+  await tx`
+    INSERT INTO ci_tmp_cands (site_id, grp, resolution, owner_id, target_id, param_types, min_params, max_params)
+    SELECT st.site_id, st.grp, st.resolution, h.ancestor_id, t.id, t.param_types, t.min_params, t.max_params
+    FROM ${tx(starts)} st
+    JOIN ci_tmp_sites s ON s.id = st.site_id
+    JOIN ci_tmp_hierarchy h ON h.class_id = st.class_id
+    JOIN ci_symbols t ON t.parent_id = h.ancestor_id
+    WHERE ${arityFits} AND ${visible} AND CASE
+      WHEN NOT s.is_navigation THEN t.name = s.method_name AND t.kind = ANY(${CALLABLES})
+      ELSE (t.kind = 'property' AND t.name = s.method_name AND ${memberProperty(tx, "t")})
+        OR (t.kind = 'method' AND t.max_params = 0
+          AND t.name = 'get' || upper(left(s.method_name, 1)) || substr(s.method_name, 2))
+    END
+  `;
+}
+
+/** A property symbol declared in its class body, not inside one of its callables. */
+function memberProperty(tx: Tx, alias: string) {
+  const t = tx(alias);
+  return tx`NOT EXISTS (SELECT 1 FROM ci_symbols fn WHERE fn.parent_id = ${t}.parent_id
+    AND fn.kind = ANY(${CALLABLES}) AND fn.start_line <= ${t}.start_line AND fn.end_line >= ${t}.end_line)`;
+}
+
+/**
+ * An override in a subclass of the owner hides the owner's method (same group). Scoped to
+ * the sites in `sites` when given.
+ */
+async function removeOverridden(tx: Tx, sites: string | null): Promise<void> {
+  const scope = sites ? tx`AND a.site_id IN (SELECT site_id FROM ${tx(sites)})` : tx``;
+  await tx`
+    DELETE FROM ci_tmp_cands a
+    USING ci_tmp_cands b, ci_tmp_hierarchy h
+    WHERE b.site_id = a.site_id AND b.grp = a.grp AND b.owner_id <> a.owner_id
+      AND h.class_id = b.owner_id AND h.ancestor_id = a.owner_id
+      AND ${sameSignature(tx, "a", "b")} ${scope}
+  `;
+}
+
+/** Sites narrowCandidates left alone keep their first group. */
+async function keepFirstGroup(tx: Tx): Promise<void> {
+  await tx`
+    DELETE FROM ci_tmp_cands c
+    USING (SELECT site_id, min(grp) AS grp FROM ci_tmp_cands GROUP BY site_id) f
+    WHERE c.site_id = f.site_id AND c.grp > f.grp
+  `;
+}
+
+/**
+ * Receivers whose type comes from a symbol rather than from the call site, resolved after
+ * every other site so their inputs are final:
+ * - a chain `a.b().c()` / `a.b.c()`: the declared type of each target the receiver step
+ *   resolved to (resolution `chain`). The step itself is never a chain site, so a chain
+ *   stops after one hop;
+ * - an identifier the file's scope does not declare: the nearest property of that name in
+ *   the caller class's supertypes (resolution `typed`), since a base class in another file
+ *   is outside the per-file scope walk.
+ * Extension functions are not tried on these receivers.
+ */
+async function resolveDerivedReceivers(tx: Tx, repoId: string, arityFits: Fragment, visible: Fragment): Promise<void> {
+  await tx`
+    CREATE TEMP TABLE ci_tmp_derived ON COMMIT DROP AS
+    SELECT DISTINCT s.id AS site_id, c.target_id AS typed_by, 'chain'::text AS resolution
+    FROM ci_tmp_sites s JOIN ci_tmp_cands c ON c.site_id = s.receiver_site_id
+    WHERE s.receiver_site_id IS NOT NULL
+    UNION ALL
+    (SELECT DISTINCT ON (s.id) s.id, t.id, 'typed'
+    FROM ci_tmp_sites s
+    JOIN ci_tmp_hierarchy h ON h.class_id = s.caller_class_id
+    JOIN ci_symbols t ON t.parent_id = h.ancestor_id AND t.kind = 'property' AND t.name = s.receiver
+    WHERE s.receiver_kind = 'identifier' AND s.receiver_type IS NULL AND NOT s.receiver_declared
+      AND t.declared_type IS NOT NULL AND ${memberProperty(tx, "t")}
+    ORDER BY s.id, h.depth)
+  `;
+  await resolveTypeNames(tx, repoId, "derived");
+  await tx`
+    CREATE TEMP TABLE ci_tmp_starts2 ON COMMIT DROP AS
+    SELECT DISTINCT d.site_id, 1 AS grp, x.class_id, d.resolution
+    FROM ci_tmp_derived d
+    JOIN ci_tmp_type_resolved x ON x.ref_kind = 'decl' AND x.ref_id = d.typed_by
+  `;
+  await insertMemberCandidates(tx, "ci_tmp_starts2", arityFits, visible);
+  await removeOverridden(tx, "ci_tmp_starts2");
+  await narrowCandidates(tx, "ci_tmp_starts2");
 }
 
 /**
@@ -421,8 +563,8 @@ async function insertCallEdges(tx: Tx, repoId: string): Promise<number> {
 async function insertFunctionCandidates(
   tx: Tx,
   repoId: string,
-  arityFits: postgres.PendingQuery<postgres.Row[]>,
-  visible: postgres.PendingQuery<postgres.Row[]>,
+  arityFits: Fragment,
+  visible: Fragment,
 ): Promise<void> {
   await tx`
     CREATE TEMP TABLE ci_tmp_fsites ON COMMIT DROP AS
@@ -430,6 +572,7 @@ async function insertFunctionCandidates(
     FROM ci_tmp_sites s
     WHERE (s.receiver_kind = 'none'
         OR EXISTS (SELECT 1 FROM ci_tmp_type_resolved x WHERE x.ref_kind = 'typed' AND x.ref_id = s.id))
+      AND NOT s.is_navigation
       AND NOT EXISTS (SELECT 1 FROM ci_tmp_cands c WHERE c.site_id = s.id)
   `;
   await tx`CREATE INDEX ON ci_tmp_fsites (id)`;
@@ -511,21 +654,24 @@ async function insertFunctionCandidates(
  * first lookup group with a candidate that is not certainly incompatible, and in it the
  * best fits (narrowOverloads); when no group has one, the first group whole.
  */
-async function narrowCandidates(tx: Tx): Promise<void> {
+async function narrowCandidates(tx: Tx, sites: string | null): Promise<void> {
+  const scope = sites ? tx`AND c.site_id IN (SELECT site_id FROM ${tx(sites)})` : tx``;
   const rows = await tx<{
     site_id: string; grp: number; target_id: string; language: string;
     arg_types: (string | null)[] | null; arg_names: (string | null)[] | null;
-    param_types: (string | null)[] | null; param_names: (string | null)[] | null;
+    param_types: (string | null)[] | null; param_names: (string | null)[] | null; vararg: boolean;
   }[]>`
     -- to_json: postgres.js parses a NULL array element as the string "NULL".
     SELECT c.site_id, c.grp, c.target_id, f.language, to_json(cs.arg_types) AS arg_types, to_json(cs.arg_names) AS arg_names,
-      to_json(t.param_types) AS param_types, to_json(t.param_names) AS param_names
+      to_json(t.param_types) AS param_types, to_json(t.param_names) AS param_names,
+      (t.max_params IS NULL AND t.min_params IS NOT NULL) AS vararg
     FROM ci_tmp_cands c
     JOIN ci_call_sites cs ON cs.id = c.site_id
     JOIN ci_files f ON f.id = cs.file_id
     JOIN ci_symbols t ON t.id = c.target_id
     WHERE c.site_id IN (SELECT site_id FROM ci_tmp_cands GROUP BY site_id HAVING count(DISTINCT target_id) > 1)
       AND (cs.arg_names IS NOT NULL OR EXISTS (SELECT 1 FROM unnest(cs.arg_types) a WHERE a IS NOT NULL))
+      ${scope}
     ORDER BY c.site_id, c.grp
   `;
   if (rows.length === 0) return;
@@ -550,7 +696,32 @@ async function narrowCandidates(tx: Tx): Promise<void> {
     if (!set) supers.set(p.name, (set = new Set()));
     set.add(p.super_name);
   }
-  const ctx: TypeContext = { isRepoClass: (n) => classNames.has(n), supertypes: (n) => supers.get(n) };
+  // Names in `extends` clauses along extends edges only: a superclass chain (or, for an
+  // interface, its extended interfaces), never through an implemented interface.
+  const extendsChain = new Map<string, Set<string>>();
+  const chainPairs = await tx<{ name: string; super_name: string }[]>`
+    WITH RECURSIVE ch(class_id, anc_id, depth) AS (
+      SELECT id, id, 0 FROM ci_tmp_classes
+      UNION ALL
+      SELECT ch.class_id, e.target_id, ch.depth + 1
+      FROM ch JOIN ci_edges e ON e.source_id = ch.anc_id AND e.kind = 'extends'
+      WHERE ch.depth < ${MAX_HIERARCHY_DEPTH}
+    )
+    SELECT DISTINCT c.name, substring(ir.type_name FROM '[^.]+$') AS super_name
+    FROM ch
+    JOIN ci_tmp_classes c ON c.id = ch.class_id
+    JOIN ci_inheritance_refs ir ON ir.source_symbol_id = ch.anc_id AND ir.kind = 'extends'
+  `;
+  for (const p of chainPairs) {
+    let set = extendsChain.get(p.name);
+    if (!set) extendsChain.set(p.name, (set = new Set()));
+    set.add(p.super_name);
+  }
+  const ctx: TypeContext = {
+    isRepoClass: (n) => classNames.has(n),
+    supertypes: (n) => supers.get(n),
+    extendsChain: (n) => extendsChain.get(n),
+  };
 
   const dropSites: string[] = [];
   const dropTargets: string[] = [];
@@ -558,7 +729,7 @@ async function narrowCandidates(tx: Tx): Promise<void> {
     let j = i;
     while (j < rows.length && rows[j].site_id === rows[i].site_id) j++;
     const site = { argTypes: rows[i].arg_types, argNames: rows[i].arg_names, language: rows[i].language };
-    const all = rows.slice(i, j).map((r) => ({ id: r.target_id, grp: r.grp, paramTypes: r.param_types, paramNames: r.param_names }));
+    const all = rows.slice(i, j).map((r) => ({ id: r.target_id, grp: r.grp, paramTypes: r.param_types, paramNames: r.param_names, vararg: r.vararg }));
     const groups = [...new Set(all.map((c) => c.grp))].map((g) => all.filter((c) => c.grp === g));
     const applicable = groups.find((g) => g.some((c) => fitOf(site, c, ctx) > 0));
     const kept = new Set((applicable ? narrowOverloads(site, applicable, ctx) : groups[0]).map((c) => `${c.grp}:${c.id}`));

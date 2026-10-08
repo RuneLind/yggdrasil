@@ -161,8 +161,10 @@ function extractKotlinInheritance(
         const userType = findNamedChild(firstChild, "user_type");
         const typeName = userType && normalizeTypeName(nodeText(userType, source));
         if (typeName) inheritance.push({ kind: "extends", typeName, symbolIndex });
-      } else if (firstChild.type === "user_type") {
-        const typeName = normalizeTypeName(nodeText(firstChild, source));
+      } else if (firstChild.type === "user_type" || firstChild.type === "explicit_delegation") {
+        // `I by impl` (explicit_delegation) implements I like a plain `I`.
+        const userType = firstChild.type === "user_type" ? firstChild : findNamedChild(firstChild, "user_type");
+        const typeName = userType && normalizeTypeName(nodeText(userType, source));
         if (typeName) inheritance.push({ kind: "implements", typeName, symbolIndex });
       }
     }

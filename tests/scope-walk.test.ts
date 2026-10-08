@@ -312,6 +312,11 @@ describe("Kotlin constructor parameters in accessors", () => {
     expect(await typeOf("kotlin", src, "save")).toBe("Member");
   });
 
+  test("a setter sees the member, not the plain constructor parameter", async () => {
+    const src = `class C(repo: CtorRepo) {\n  val repo: Member = Member()\n  var g: Int = 0\n    set(v) { repo.save() }\n}`;
+    expect(await typeOf("kotlin", src, "save")).toBe("Member");
+  });
+
   test("the initializer of the same property still sees the parameter", async () => {
     const src = `class C(repo: CtorRepo) {\n  val repo: Member = Member()\n  val g: Int = repo.save()\n}`;
     expect(await typeOf("kotlin", src, "save")).toBe("CtorRepo");
@@ -322,6 +327,11 @@ describe("Kotlin integer literal types", () => {
   test("out of Int range is Long, an L suffix is Long, an unsigned literal (also hex) is UInt", async () => {
     const c = await call("kotlin", `fun f() { g(3000000000, 0xFFFFFFFF, 7L, 0xFFu, 1u, 2147483647, 0x7FFF_FFFF) }`, "g");
     expect(c.argTypes).toEqual(["long", "long", "long", "UInt", "UInt", "#int", "#int"]);
+  });
+
+  test("an unsigned literal past 0xFFFFFFFF, or with an L suffix, is ULong", async () => {
+    const c = await call("kotlin", `fun f() { g(0xFFFF_FFFFu, 0x1_0000_0000u, 5uL) }`, "g");
+    expect(c.argTypes).toEqual(["UInt", "ULong", "ULong"]);
   });
 
   test("a property's literal initializer gets the same type", async () => {

@@ -237,7 +237,7 @@ const KOTLIN_TYPE_NODES: ReadonlySet<string> = new Set(["user_type", "nullable_t
 
 /**
  * Kotlin `val x: T` → T; `val x = Foo(…)` → Foo (an uppercase callee is a constructor
- * call); `val x = "…"` (or another literal) → the literal's type.
+ * call); `val x = mockk<Foo>()` → Foo; `val x = "…"` (or another literal) → the literal's type.
  */
 export function kotlinVariableType(decl: SyntaxNode, value: SyntaxNode | null | undefined, source: string): string | null {
   const typeNode = decl.namedChildren.find((c: SyntaxNode) => KOTLIN_TYPE_NODES.has(c.type));
@@ -247,9 +247,21 @@ export function kotlinVariableType(decl: SyntaxNode, value: SyntaxNode | null | 
   if (value?.type === "call_expression") {
     const callee = value.namedChild(0);
     if (callee?.type === "identifier" && /^\p{Lu}/u.test(nodeText(callee, source))) return nodeText(callee, source);
+    // mockk<T>(), spyk<T>(…), mock<T>() (mockito-kotlin): T.
+    if (callee?.type === "identifier" && MOCK_FACTORIES.has(nodeText(callee, source))) {
+      const args = findNamedChild(value, "type_arguments")?.namedChildren.filter((c) => c !== null) ?? [];
+      return args.length === 1 ? normalizeTypeName(nodeText(args[0]!, source)) : null;
+    }
+  }
+  // The grammar misparses `spyk<Foo>(Foo())` (one parenthesized argument) as `spyk < Foo > (…)`.
+  if (value?.type === "binary_expression") {
+    const m = /^(\p{L}+)\s*<\s*([\p{L}_][\p{L}\p{N}_.]*)\s*>\s*\(/u.exec(nodeText(value, source));
+    if (m && MOCK_FACTORIES.has(m[1])) return m[2];
   }
   return null;
 }
+
+const MOCK_FACTORIES: ReadonlySet<string> = new Set(["mockk", "spyk", "mock", "spy"]);
 
 /** Kotlin integer literal: Long with an L suffix or out of Int range; unsigned (hex too) is UInt/ULong. */
 export function kotlinIntegerLiteralType(text: string): "Int" | "Long" | "UInt" | "ULong" {

@@ -15,7 +15,7 @@ import { canonicalType } from "./overloads.ts";
  * reads the AST, not ci_symbols.
  */
 
-export type ReceiverKind = "none" | "this" | "identifier" | "static-type" | "chain-or-expression";
+export type ReceiverKind = "none" | "this" | "super" | "identifier" | "static-type" | "chain-or-expression";
 
 export interface ExtractedCall {
   /** Normalized: `this.`, `this@Label.`, `!!` and a trailing `.Companion` removed. */
@@ -23,6 +23,18 @@ export interface ExtractedCall {
   receiverKind: ReceiverKind;
   /** Declared type of a single-identifier receiver found in scope, else null. */
   receiverType: string | null;
+  /** A single-identifier receiver that something in scope declares, typed or not. */
+  receiverDeclared: boolean;
+  /**
+   * Index in the same calls array of the step this call's receiver is: the call in
+   * `a.b().c()`, or the navigation step in `a.b.c()`. Null otherwise.
+   */
+  receiverStep: number | null;
+  /**
+   * A navigation step (`a.b` as a receiver, methodName `b`), recorded only so the call on
+   * it can be typed: argCount 0, never an edge of its own.
+   */
+  navigation: boolean;
   methodName: string;
   /** Positional and named arguments plus a Kotlin trailing lambda; null for a spread. */
   argCount: number | null;
@@ -184,6 +196,7 @@ interface Receiver {
   receiver: string | null;
   receiverKind: ReceiverKind;
   receiverType: string | null;
+  receiverDeclared: boolean;
 }
 
 /**
@@ -198,12 +211,35 @@ function withType(text: string, lookup: (name: string) => Decl | undefined): Rec
   const kind = classifyReceiver(receiver);
   if ((kind === "identifier" || kind === "static-type") && !receiver.includes(".")) {
     const found = lookup(receiver);
-    if (found !== undefined) return { receiver, receiverKind: "identifier", receiverType: found };
+    if (found !== undefined) return { receiver, receiverKind: "identifier", receiverType: found, receiverDeclared: true };
   }
-  return { receiver, receiverKind: kind, receiverType: null };
+  return { receiver, receiverKind: kind, receiverType: null, receiverDeclared: false };
 }
 
-const NONE: Receiver = { receiver: null, receiverKind: "none", receiverType: null };
+const NONE: Receiver = { receiver: null, receiverKind: "none", receiverType: null, receiverDeclared: false };
+const SUPER: Receiver = { receiver: "super", receiverKind: "super", receiverType: null, receiverDeclared: false };
+
+/**
+ * Receiver steps by syntax node: `link` records that call `index` has the call or
+ * navigation step at `node` as its receiver; `resolve` fills receiverStep once the walk
+ * has recorded every call (an outer call is recorded before the calls inside it).
+ */
+class StepLinks {
+  private readonly byNode = new Map<number, number>();
+  private readonly pending: Array<[number, number]> = [];
+
+  recorded(node: SyntaxNode, index: number): void {
+    this.byNode.set(node.id, index);
+  }
+
+  link(index: number, node: SyntaxNode): void {
+    this.pending.push([index, node.id]);
+  }
+
+  resolve(calls: ExtractedCall[]): void {
+    for (const [index, nodeId] of this.pending) calls[index].receiverStep = this.byNode.get(nodeId) ?? null;
+  }
+}
 
 function named(node: SyntaxNode): SyntaxNode[] {
   return node.namedChildren.filter((c): c is SyntaxNode => c !== null);
@@ -428,8 +464,14 @@ export function extractJavaCalls(root: SyntaxNode, source: string, calls: Extrac
     if (!nameNode) return;
     const args = node.childForFieldName("arguments");
     const argNodes = args ? named(args).filter((c) => c.type !== "line_comment" && c.type !== "block_comment") : [];
+    const object = node.childForFieldName("object");
+    const receiver = object?.type === "super" ? SUPER : javaReceiver(object, scope, source);
+    const index = calls.length;
+    links.recorded(node, index);
     calls.push({
-      ...javaReceiver(node.childForFieldName("object"), scope, source),
+      ...receiver,
+      receiverStep: null,
+      navigation: false,
       methodName: nodeText(nameNode, source),
       argCount: argNodes.length,
       argTypes: argNodes.map((a) => javaArgType(a, scope, source)),
@@ -438,10 +480,29 @@ export function extractJavaCalls(root: SyntaxNode, source: string, calls: Extrac
       line: node.startPosition.row + 1,
       startIndex: node.startIndex,
     });
+    // No Java navigation steps: Java fields are not symbols, so `a.b.c()` has nothing to type `b`.
+    if (object?.type === "method_invocation") links.link(index, object);
   };
 
+  const links = new StepLinks();
   scope.push({ names: new Map() });
   visit(root);
+  links.resolve(calls);
+}
+
+function navigationStep(head: Receiver, member: string, node: SyntaxNode): ExtractedCall {
+  return {
+    ...head,
+    receiverStep: null,
+    navigation: true,
+    methodName: member,
+    argCount: 0,
+    argTypes: [],
+    argNames: null,
+    implicitReceiverType: null,
+    line: node.startPosition.row + 1,
+    startIndex: node.startIndex,
+  };
 }
 
 /** Declarations a Java statement scopes over its whole subtree, or null. */
@@ -750,28 +811,48 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
     if (!callee) return;
     let receiver: Receiver;
     let methodName: string;
+    let step: SyntaxNode | null = null;
     if (callee.type === "navigation_expression") {
       const parts = named(callee);
       if (parts.length < 2) return;
-      receiver = kotlinReceiver(parts[0], scope, source);
+      receiver = parts[0].type === "super_expression" ? SUPER : kotlinReceiver(parts[0], scope, source);
       methodName = nodeText(parts[parts.length - 1], source);
+      step = parts[0];
+      while (step.type === "unary_expression" && step.childForFieldName("operator")?.type === "!!") {
+        step = step.childForFieldName("argument") ?? step;
+      }
     } else if (callee.type === "identifier") {
       receiver = NONE;
       methodName = nodeText(callee, source);
     } else return;
+    const index = calls.length;
+    links.recorded(node, index);
     calls.push({
       ...receiver,
+      receiverStep: null,
+      navigation: false,
       methodName,
       ...kotlinArguments(node, scope, source),
       implicitReceiverType: receiver.receiverKind === "none" || receiver.receiverKind === "this" ? scope.implicitReceiver() : null,
       line: node.startPosition.row + 1,
       startIndex: node.startIndex,
     });
+    if (step?.type === "call_expression") links.link(index, step);
+    else if (step?.type === "navigation_expression" && step.namedChildCount === 2 && receiver.receiverKind === "chain-or-expression") {
+      const head = step.namedChild(0)!;
+      const member = step.namedChild(1)!;
+      if (member.type === "identifier" && head.type !== "this_expression" && head.type !== "super_expression") {
+        calls[index].receiverStep = calls.length;
+        calls.push(navigationStep(kotlinReceiver(head, scope, source), nodeText(member, source), step));
+      }
+    }
   };
 
+  const links = new StepLinks();
   // Top-level properties are in scope wherever they are declared in the file.
   const top = new Map<string, Decl>();
   for (const c of named(root)) if (c.type === "property_declaration") addKotlinProperty(c, top, source);
   scope.push({ names: top });
   for (const c of all(root)) visit(c);
+  links.resolve(calls);
 }
