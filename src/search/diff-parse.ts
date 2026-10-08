@@ -2,14 +2,41 @@
  * Pure parser for `git diff --unified=0` output. Kept free of I/O so it can be
  * table-driven over fixture diff text without spawning git or touching a DB.
  *
- * Produces, per changed file, the set of line numbers a change touched, plus the
- * running added/removed totals. Those line ranges are later intersected with the
- * indexed symbols' [start_line, end_line] to find which symbols a change hit.
+ * Produces, per changed file, the line numbers a change touched on each side: new-side
+ * lines keyed on the new path (`files`, matched against an index of the diff's head) and
+ * one old-side range per hunk keyed on the old path (`baseFiles`, matched against an
+ * index of the base), plus the added/removed totals. detect-changes intersects them with
+ * the indexed symbols' [start_line, end_line] to find which symbols a change hit.
  */
 
+/**
+ * Inclusive line span. `end < start` is the empty span between lines `end` and `start`:
+ * an insertion point. rangeHits then requires a symbol to contain both neighbouring
+ * lines, so code inserted just after a method's closing brace does not flag that
+ * method, but code inserted inside its body does.
+ */
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * An old-side hunk range. `removed` holds the text of its old-side lines (start..end);
+ * an insertion-only hunk keeps its inserted (new-side) lines in `inserted` instead.
+ */
+export interface BaseRange extends LineRange {
+  inserted?: string[];
+  removed?: string[];
+}
+
 export interface DiffSummary {
-  /** path → set of touched line numbers (new-side for edits/adds, old-side for pure deletions) */
+  /** Head side: new path → touched new-side lines (old-side for pure deletions). */
   files: Map<string, Set<number>>;
+  /**
+   * Base side: old path → one old-side range per hunk. Added files
+   * (`--- /dev/null`) are absent, since an index of the base holds no symbols for them.
+   */
+  baseFiles: Map<string, BaseRange[]>;
   addedLines: number;
   removedLines: number;
 }
@@ -84,17 +111,24 @@ function headerPath(raw: string): string {
  */
 export function parseGitDiff(text: string): DiffSummary {
   const files = new Map<string, Set<number>>();
+  const baseFiles = new Map<string, BaseRange[]>();
   let addedLines = 0;
   let removedLines = 0;
 
   let currentFile: string | null = null;
+  let currentOldFile: string | null = null;
   let pendingOldFile: string | null = null;
   let inHeader = false;
+  let inserting: string[] | null = null;
+  let removing: string[] | null = null;
 
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
       inHeader = true;
+      inserting = null;
+      removing = null;
       currentFile = null;
+      currentOldFile = null;
       pendingOldFile = null;
       continue;
     }
@@ -109,11 +143,25 @@ export function parseGitDiff(text: string): DiffSummary {
       // New-side path. "/dev/null" means a deleted file — fall back to the old path.
       currentFile = line.startsWith("+++ /dev/null") ? pendingOldFile : headerPath(line.slice(4));
       if (currentFile && !files.has(currentFile)) files.set(currentFile, new Set());
+      currentOldFile = pendingOldFile;
+      if (currentOldFile && !baseFiles.has(currentOldFile)) baseFiles.set(currentOldFile, []);
       inHeader = false;
       continue;
     }
 
+    if (inserting && line.startsWith("+")) {
+      inserting.push(line.slice(1));
+      continue;
+    }
+
+    if (removing && line.startsWith("-")) {
+      removing.push(line.slice(1));
+      continue;
+    }
+
     if (line.startsWith("@@ ") && currentFile) {
+      inserting = null;
+      removing = null;
       // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@  (counts default to 1)
       const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!match) continue;
@@ -131,8 +179,22 @@ export function parseGitDiff(text: string): DiffSummary {
         // Deletion-only hunk: no new-side lines, so flag the old-side region.
         for (let i = removedStart; i < removedStart + removed; i++) lines.add(i);
       }
+
+      if (currentOldFile) {
+        // git writes an empty old side as `-N,0`: zero lines *after* line N.
+        const start = removed === 0 ? removedStart + 1 : removedStart;
+        const range: BaseRange = { start, end: start + removed - 1 };
+        if (removed === 0) inserting = range.inserted = [];
+        else removing = range.removed = [];
+        baseFiles.get(currentOldFile)!.push(range);
+      }
     }
   }
 
-  return { files, addedLines, removedLines };
+  return { files, baseFiles, addedLines, removedLines };
+}
+
+/** Does `range` touch a symbol spanning [start_line, end_line]? See LineRange for empty ranges. */
+export function rangeHits(range: LineRange, sym: { start_line: number; end_line: number }): boolean {
+  return sym.start_line <= range.end && sym.end_line >= range.start;
 }
