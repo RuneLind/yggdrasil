@@ -15,7 +15,7 @@ export function canonicalType(normalized: string): string {
   return BOXED[simple] ?? simple;
 }
 
-/** Java widening conversions (Kotlin has none, but they only add candidates). */
+/** Java widening conversions. Applied to Kotlin too, which has none; `dominates` can then drop a correct `Any` overload (known limit, PR 4). */
 const WIDENS_TO: Record<string, readonly string[]> = {
   byte: ["short", "int", "long", "float", "double"],
   short: ["int", "long", "float", "double"],
