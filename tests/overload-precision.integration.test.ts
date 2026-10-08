@@ -477,8 +477,8 @@ class K {
     expect(await lines("ca.K.viaBound")).toEqual(["ca.K.f:4"]);
   });
 
-  test("Java num(1) keeps num(double): an int literal widens to double", async () => {
-    expect(await lines("ca.S.viaLiteral")).toEqual(["ca.S.num:13"]);
+  test("Java num(1) keeps num(double) and num(Object): a folded double may be Double, which takes no int", async () => {
+    expect(await lines("ca.S.viaLiteral")).toEqual(["ca.S.num:13", "ca.S.num:14"]);
   });
 });
 

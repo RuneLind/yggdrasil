@@ -2,6 +2,7 @@ import { hybridSearch, type SearchResult } from "./hybrid-search.ts";
 import { analyzeImpactBySymbolId, type ImpactEntry } from "./impact.ts";
 import { getSymbolById } from "../db/symbols.ts";
 import { getIncomingEdges, getOutgoingEdges, type EdgeNeighbor } from "../db/edges.ts";
+import { edgeBuckets, withDispatchedCallers, type CallerNeighbor } from "./symbol-context.ts";
 
 export interface AnalyzeTicketOptions {
   repo?: string;
@@ -20,7 +21,8 @@ export interface AnalyzedSymbol {
     visibility: string | null;
     doc_comment: string | null;
   };
-  callers: EdgeNeighbor[];
+  /** Direct callers, then callers that reach this method by dispatch (with `via`). */
+  callers: CallerNeighbor[];
   callees: EdgeNeighbor[];
   inheritance: {
     extends: EdgeNeighbor[];
@@ -76,14 +78,16 @@ export async function analyzeTicket(
 
     if (!target) return null;
 
-    const callers = incoming.filter((e) => e.kind === "calls").slice(0, MAX_PER_BUCKET);
-    const callees = outgoing.filter((e) => e.kind === "calls").slice(0, MAX_PER_BUCKET);
-    const ext = outgoing.filter((e) => e.kind === "extends").slice(0, MAX_PER_BUCKET);
-    const impl = outgoing.filter((e) => e.kind === "implements").slice(0, MAX_PER_BUCKET);
-    const extBy = incoming.filter((e) => e.kind === "extends").slice(0, MAX_PER_BUCKET);
-    const implBy = incoming.filter((e) => e.kind === "implements").slice(0, MAX_PER_BUCKET);
-
     const affected = impact?.affected ?? [];
+    const b = edgeBuckets(incoming, outgoing);
+    const cap = <T>(xs: T[]) => xs.slice(0, MAX_PER_BUCKET);
+    const callers = cap(withDispatchedCallers(b.callers, affected));
+    const callees = cap(b.callees);
+    const ext = cap(b.extends);
+    const impl = cap(b.implements);
+    const extBy = cap(b.extended_by);
+    const implBy = cap(b.implemented_by);
+
     const byRepo: Record<string, number> = {};
     for (const a of affected) byRepo[a.repo_name] = (byRepo[a.repo_name] ?? 0) + 1;
     const tests = affected.filter((a) => a.archetype === "test");
