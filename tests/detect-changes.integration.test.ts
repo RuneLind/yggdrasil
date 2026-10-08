@@ -98,7 +98,7 @@ describe.skipIf(!RUN)("detect_changes against an index of the working tree", () 
     expect(result?.side).toBe("head");
     expect(result?.base).toBe(headSha);
     expect(result?.head).toBeNull();
-    // A working-tree head never warns: last_commit cannot name it.
+    // HEAD is still at last_commit, so the index may hold the working tree: no warning.
     expect(result?.warnings).toEqual([]);
     expect(result?.changedSymbols.map((s) => s.qualified_name)).toEqual(["p.K.a", "p.K.b"]);
   });
@@ -423,5 +423,140 @@ describe.skipIf(!RUN)("detect_changes on a renamed file", () => {
     expect(result?.side).toBe("base");
     expect(result?.changedFiles).toEqual([BRUKER]);
     expect(result?.changedSymbols.map((s) => s.qualified_name)).toEqual(["no.nav.app.Bruker.brukTo"]);
+  });
+});
+
+const C_FILE = "src/main/kotlin/p/C.kt";
+const C_BASE = `package p
+
+class C(private val id: Int) {
+    fun a(): Int {
+        return 1
+    }
+
+    /** b gir to. */
+    fun b(): Int {
+        return 2
+    }
+
+    fun x(): Int {
+        return 3
+    }
+
+    fun z(): Int {
+        return 4
+    }
+}
+`;
+// Expression body: a block body ending in `}` would let git slide the insertion into a().
+const NEW_FN = "    fun n(): Int = 7\n\n";
+
+/**
+ * The container rule on real base-side diffs. Index at c0 (main); each branch is one case:
+ *   ins:  a() and b() changed, `fun n()` inserted between them
+ *   del:  x() deleted with its blank separator, z() changed
+ *   ctor: the primary constructor and a() changed
+ *   fld:  a property inserted between a() and b()
+ *   kdoc: only b()'s KDoc changed
+ */
+describe.skipIf(!RUN)("detect_changes container rule against an index of the base", () => {
+  let repo: FixtureRepo;
+
+  const branch = async (name: string, content: string) => {
+    await git(repo.path, "checkout", "-q", "-b", name, "main");
+    await writeFile(join(repo.path, C_FILE), content);
+    await git(repo.path, "commit", "-q", "-am", name);
+    await git(repo.path, "checkout", "-q", "main");
+  };
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({ [C_FILE]: C_BASE });
+    await git(repo.path, "init", "-q", "-b", "main");
+    await git(repo.path, "add", ".");
+    await git(repo.path, "commit", "-q", "-m", "c0");
+    await repo.reindex();
+    await branch("ins", C_BASE.replace("return 1", "return 10").replace("return 2", "return 20").replace("    /** b", `${NEW_FN}    /** b`));
+    await branch("del", C_BASE.replace("    fun x(): Int {\n        return 3\n    }\n\n", "").replace("return 4", "return 40"));
+    await branch("ctor", C_BASE.replace("private val id: Int", "private val id: Long").replace("return 1", "return 10"));
+    await branch("fld", C_BASE.replace("    /** b", "    val ny = 5\n\n    /** b"));
+    await branch("kdoc", C_BASE.replace("b gir to.", "b gir alltid to."));
+  });
+
+  afterAll(async () => {
+    await repo?.cleanup();
+  });
+
+  const run = async (ref: string) => {
+    const result = await detectChanges(repo.name, { ref });
+    expect(result?.side).toBe("base");
+    return { changed: result!.changedSymbols.map((s) => s.qualified_name), dropped: result!.droppedContainers };
+  };
+
+  test("a method inserted between two changed methods does not keep the class", async () => {
+    expect(await run("main...ins")).toEqual({ changed: ["p.C.a", "p.C.b"], dropped: ["p.C"] });
+  });
+
+  test("a deleted method's blank separator does not keep the class", async () => {
+    expect(await run("main...del")).toEqual({ changed: ["p.C.x", "p.C.z"], dropped: ["p.C"] });
+  });
+
+  test("a changed primary constructor keeps the class", async () => {
+    const { changed, dropped } = await run("main...ctor");
+    expect(changed).toContain("p.C");
+    expect(changed).toContain("p.C.a");
+    expect(dropped).toEqual([]);
+  });
+
+  test("a property inserted between members keeps the class", async () => {
+    expect(await run("main...fld")).toEqual({ changed: ["p.C"], dropped: [] });
+  });
+
+  test("a KDoc-only change outside members does not keep the class", async () => {
+    expect((await run("main...kdoc")).changed).not.toContain("p.C");
+  });
+});
+
+/**
+ * Single ref on a clean checkout of another branch: the index was built at main, then
+ * feature (x deleted, z changed) was checked out. `ref: "main"` diffs main against the
+ * working tree, and the index holds main, so the base side applies.
+ */
+describe.skipIf(!RUN)("detect_changes with a single ref after checking out another branch", () => {
+  let repo: FixtureRepo;
+  let c0: string, f1: string;
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({ [C_FILE]: C_BASE });
+    await git(repo.path, "init", "-q", "-b", "main");
+    await git(repo.path, "add", ".");
+    await git(repo.path, "commit", "-q", "-m", "c0");
+    c0 = await git(repo.path, "rev-parse", "HEAD");
+    await repo.reindex(); // last_commit = c0
+    await git(repo.path, "checkout", "-q", "-b", "feature");
+    await writeFile(join(repo.path, C_FILE), C_BASE.replace("    fun x(): Int {\n        return 3\n    }\n\n", "").replace("return 4", "return 40"));
+    await git(repo.path, "commit", "-q", "-am", "feature");
+    f1 = await git(repo.path, "rev-parse", "HEAD");
+  });
+
+  afterAll(async () => {
+    await repo?.cleanup();
+  });
+
+  test("a single ref equal to last_commit, with HEAD elsewhere, uses the base side", async () => {
+    const result = await detectChanges(repo.name, { ref: "main" });
+    expect(result?.side).toBe("base");
+    expect(result?.base).toBe(c0);
+    expect(result?.head).toBeNull();
+    expect(result?.warnings).toEqual([]);
+    expect(result?.changedSymbols.map((s) => s.qualified_name)).toEqual(["p.C.x", "p.C.z"]);
+  });
+
+  test("head side warns when the index is not at the checked-out HEAD", async () => {
+    for (const ref of [undefined, "feature"]) {
+      const result = await detectChanges(repo.name, { ref });
+      expect(result?.side).toBe("head");
+      expect(result?.warnings).toHaveLength(1);
+      expect(result?.warnings[0]).toContain(`is at ${c0.slice(0, 7)}, but the working tree is on ${f1.slice(0, 7)}`);
+    }
   });
 });

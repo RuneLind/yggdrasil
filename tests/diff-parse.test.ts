@@ -322,6 +322,33 @@ diff --git a/src/Keep.java b/src/Keep.java
     expect(ranges[1]).toEqual({ start: 50, end: 49, inserted: ['    @Deprecated("x")', '    @Suppress("y")'] });
   });
 
+  test("an insertion hunk followed by an edit hunk keeps only its own inserted lines", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -4,0 +5 @@
++    val ny = 1
+@@ -9 +10 @@
+-        return 2
++        return 3`;
+    const ranges = parseGitDiff(diff).baseFiles.get("src/A.kt")!;
+    expect(ranges[0].inserted).toEqual(["    val ny = 1"]);
+  });
+
+  test("a hunk with removed lines keeps their old-side text", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -7,2 +7 @@
+-        return 2
+-
++        return 3
+@@ -20 +19,0 @@
+-    // borte`;
+    const ranges = parseGitDiff(diff).baseFiles.get("src/A.kt")!;
+    expect(ranges.map((r) => r.removed)).toEqual([["        return 2", ""], ["    // borte"]]);
+  });
+
   test("deleted file (+++ /dev/null) → old path, old-side range", () => {
     const diff = `diff --git a/src/Gone.java b/src/Gone.java
 deleted file mode 100644

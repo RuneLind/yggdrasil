@@ -20,9 +20,13 @@ export interface LineRange {
   end: number;
 }
 
-/** An old-side hunk range; an insertion-only hunk also keeps its inserted (new-side) lines. */
+/**
+ * An old-side hunk range. `removed` holds the text of its old-side lines (start..end);
+ * an insertion-only hunk keeps its inserted (new-side) lines in `inserted` instead.
+ */
 export interface BaseRange extends LineRange {
   inserted?: string[];
+  removed?: string[];
 }
 
 export interface DiffSummary {
@@ -116,11 +120,13 @@ export function parseGitDiff(text: string): DiffSummary {
   let pendingOldFile: string | null = null;
   let inHeader = false;
   let inserting: string[] | null = null;
+  let removing: string[] | null = null;
 
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
       inHeader = true;
       inserting = null;
+      removing = null;
       currentFile = null;
       currentOldFile = null;
       pendingOldFile = null;
@@ -148,8 +154,14 @@ export function parseGitDiff(text: string): DiffSummary {
       continue;
     }
 
+    if (removing && line.startsWith("-")) {
+      removing.push(line.slice(1));
+      continue;
+    }
+
     if (line.startsWith("@@ ") && currentFile) {
       inserting = null;
+      removing = null;
       // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@  (counts default to 1)
       const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!match) continue;
@@ -173,6 +185,7 @@ export function parseGitDiff(text: string): DiffSummary {
         const start = removed === 0 ? removedStart + 1 : removedStart;
         const range: BaseRange = { start, end: start + removed - 1 };
         if (removed === 0) inserting = range.inserted = [];
+        else removing = range.removed = [];
         baseFiles.get(currentOldFile)!.push(range);
       }
     }

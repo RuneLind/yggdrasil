@@ -212,7 +212,7 @@ server.tool(
   "detect_changes",
   "Given a git diff or commit range, identify which symbols changed and what calls them. " +
     "For a PR review, index the PR's base and pass ref 'base...head': the old-side hunk lines are matched against the base's symbols, so you get the callers of what the PR changes (side 'base'). " +
-    "A class is left out of changedSymbols (listed in droppedContainers) when every change inside it lies in its methods; a header, constructor or field change keeps it. " +
+    "A class is left out of changedSymbols (listed in droppedContainers) when every change inside it lies in its methods, blank or comment lines, or methods inserted between members; a header, constructor or field change keeps it. " +
     "affectedSymbols carry edge_kind, resolution and changed_symbols (every changed symbol that reaches the entry); calls/overrides sort above imports. Check `warnings` for an index at the wrong commit.",
   {
     repo: z.string().describe("Repository name"),

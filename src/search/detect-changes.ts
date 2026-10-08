@@ -40,7 +40,7 @@ export interface ChangeDetectionResult {
   warnings: string[];
   changedFiles: string[];
   changedSymbols: ChangedSymbol[];
-  /** Containers left out of changedSymbols because every hit inside them lies in a member. */
+  /** Containers left out of changedSymbols because no hit changes the container itself (see changesContainer). */
   droppedContainers: string[];
   affectedSymbols: AffectedSymbol[];
 }
@@ -57,10 +57,11 @@ export function gitDiffArgs(revs: string[]): string[] {
   // Each flag overrides a config that would change the output parseGitDiff reads:
   // core.quotePath (C-quoted non-ASCII paths never match ci_files.path), diff.noprefix /
   // diff.mnemonicPrefix (the a/ b/ prefixes), textconv and external drivers, and
-  // diff.renames=false (a rename turns into a delete + add of the whole file).
+  // diff.renames=false (a rename turns into a delete + add of the whole file), and
+  // diff.interHunkContext (merges nearby hunks, so a base range spans unchanged lines).
   return [
     "git", "-c", "core.quotePath=false", "diff",
-    "--unified=0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
+    "--unified=0", "--inter-hunk-context=0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
     "--no-textconv", "--no-ext-diff", "-M",
     "--end-of-options", ...revs, "--",
   ];
@@ -183,7 +184,7 @@ export function dropLocalFields<T extends Spanned>(symbols: T[]): T[] {
  * so the insertion point would flag nothing. When every non-blank inserted line starts with
  * `@` and a symbol starts on the line after the insertion point, count it as a hit on that line.
  */
-export function attributeAnnotationInsertions(ranges: BaseRange[], symbols: Array<{ start_line: number }>): LineRange[] {
+export function attributeAnnotationInsertions(ranges: BaseRange[], symbols: Array<{ start_line: number }>): BaseRange[] {
   return ranges.map((r) => {
     if (r.end >= r.start || !r.inserted) return r;
     const text = r.inserted.map((l) => l.trim()).filter((l) => l !== "");
@@ -192,45 +193,95 @@ export function attributeAnnotationInsertions(ranges: BaseRange[], symbols: Arra
   });
 }
 
-/** Is every line of `r` inside `container` covered by one of `members`? */
-function coveredByMembers(r: LineRange, container: Spanned, members: Spanned[]): boolean {
-  if (r.end < r.start) return members.some((m) => rangeHits(r, m));
+/** Not blank and not comment-only. */
+function isCode(line: string): boolean {
+  const t = line.trim();
+  return t !== "" && !t.startsWith("//") && !t.startsWith("/*") && !t.startsWith("*");
+}
+
+const KOTLIN_PROPERTY = /^(?:@\w+(?:\([^)]*\))?\s+)*(?:[a-z]+\s+)*(?:val|var)\s/;
+const JAVA_FIELD = /^(?:@\w+(?:\([^)]*\))?\s+)*[\w.<>[\],? ]+\s+\w+\s*(?:=.*)?;$/;
+
+/** A Kotlin property without initializer whose next line is a getter holds no state. */
+function isComputedProperty(t: string, next: string | undefined): boolean {
+  return KOTLIN_PROPERTY.test(t) && !t.includes("=") && /^get\(\)/.test(next ?? "");
+}
+
+/**
+ * Does inserted text declare a field or property at its own top level (not inside a body)?
+ * A computed property counts as a method.
+ */
+function declaresField(lines: string[]): boolean {
+  const trimmed = lines.map((l) => l.trim()).filter((t) => t !== "");
+  let depth = 0;
+  for (const [i, t] of trimmed.entries()) {
+    const field = KOTLIN_PROPERTY.test(t) || (JAVA_FIELD.test(t) && !/^(return|throw)\b/.test(t));
+    if (depth === 0 && field && !isComputedProperty(t, trimmed[i + 1])) return true;
+    depth += (t.match(/{/g)?.length ?? 0) - (t.match(/}/g)?.length ?? 0);
+  }
+  return false;
+}
+
+/**
+ * Does hit `r` change `container` itself rather than only its members? A changed or deleted
+ * old-side line outside every member counts unless it is blank or comment-only (text from
+ * `removed`; a range without text counts every such line). An insertion outside the members
+ * counts when it adds code before `bodyStart`, the first child, fields included (header,
+ * primary constructor), or declares a field; a method inserted between members does not.
+ */
+function changesContainer(r: BaseRange, container: Spanned, members: Spanned[], bodyStart: number): boolean {
+  if (r.end < r.start) {
+    if (members.some((m) => rangeHits(r, m))) return false;
+    const inserted = r.inserted ?? [];
+    return (r.start <= bodyStart && inserted.some(isCode)) || declaresField(inserted);
+  }
   const from = Math.max(r.start, container.start_line);
   const to = Math.min(r.end, container.end_line);
   for (let line = from; line <= to; line++) {
-    if (!members.some((m) => m.start_line <= line && m.end_line >= line)) return false;
+    if (members.some((m) => m.start_line <= line && m.end_line >= line)) continue;
+    const text = r.removed?.[line - r.start];
+    if (text === undefined || isCode(text)) return true;
   }
-  return true;
+  return false;
 }
 
 /**
  * A method edit always overlaps its enclosing class too, and the class's blast radius is
- * its import graph. Drop a container when every diff range that hits it lies inside its
- * non-field members; keep it when a hit falls outside them (header, primary constructor,
- * fields, the lines between members).
+ * its import graph. Drop a container hit by `symbols` unless a range changes the container
+ * itself (see changesContainer). `fileSymbols` are all symbols of the changed files, so the
+ * members include methods the diff did not hit.
  */
 export function dropEnclosingContainers<T extends Spanned & { parent_id: string | null; file_path: string }>(
   symbols: T[],
-  ranges: Map<string, LineRange[]>,
+  ranges: Map<string, BaseRange[]>,
+  fileSymbols: T[] = symbols,
 ): { kept: T[]; dropped: T[] } {
   const isDropped = (c: T) => {
     if (!CONTAINER_KINDS.has(c.kind)) return false;
-    const members = symbols.filter((s) => s.parent_id === c.id && !FIELD_KINDS.has(s.kind));
+    const children = fileSymbols.filter((s) => s.parent_id === c.id);
+    const members = children.filter((s) => !FIELD_KINDS.has(s.kind));
     if (members.length === 0) return false;
+    const bodyStart = Math.min(...children.map((s) => s.start_line));
     const hits = (ranges.get(c.file_path) ?? []).filter((r) => rangeHits(r, c));
-    return hits.every((r) => coveredByMembers(r, c, members));
+    return !hits.some((r) => changesContainer(r, c, members, bodyStart));
   };
   const dropped = new Set(symbols.filter(isDropped));
   return { kept: symbols.filter((s) => !dropped.has(s)), dropped: [...dropped] };
 }
 
-/** Calls and overrides before imports; then confidence, then depth. */
-export function compareAffected(
-  a: { edge_kind: string; confidence: number; depth: number },
-  b: { edge_kind: string; confidence: number; depth: number },
-): number {
-  const rank = (e: { edge_kind: string }) => (e.edge_kind === "imports" ? 1 : 0);
-  return rank(a) - rank(b) || b.confidence - a.confidence || a.depth - b.depth;
+type Ranked = { edge_kind: string; confidence: number; depth: number; qualified_name?: string };
+
+/** Calls and overrides before imports; then confidence; then calls before overrides, depth, qualified name. */
+export function compareAffected(a: Ranked, b: Ranked): number {
+  const rank = (e: Ranked) => (e.edge_kind === "imports" ? 1 : 0);
+  const kind = (e: Ranked) => (e.edge_kind === "calls" ? 0 : e.edge_kind === "overrides" ? 1 : 2);
+  return (
+    rank(a) - rank(b) ||
+    b.confidence - a.confidence ||
+    kind(a) - kind(b) ||
+    a.depth - b.depth ||
+    (a.qualified_name ?? "").localeCompare(b.qualified_name ?? "")
+  );
 }
 
 /**
@@ -274,13 +325,15 @@ export async function detectChanges(
   if (!repo) return null;
 
   const { base, head } = await resolveDiffSides(repo.path, ref);
-  // Only a two-sided diff can have the index at its base. A single ref or no ref diffs
-  // against the working tree, which is what the index reads, so the index is the head.
-  const side: DiffSide = options?.side ?? (head !== null && repo.last_commit === base ? "base" : "head");
+  // A single ref or no ref diffs against the working tree. The index holds the base only
+  // when it was built at the base and HEAD has moved since (it predates the checkout);
+  // with HEAD still at last_commit it may hold working-tree edits, so it is the head.
+  const headNow = head === null ? (ref ? await headOrEmptyTree(repo.path) : base) : null;
+  const atBase = repo.last_commit === base && (head !== null || repo.last_commit !== headNow);
+  const side: DiffSide = options?.side ?? (atBase ? "base" : "head");
   tracer?.setQuery(repoName, ref, side);
   tracer?.setRefs(base, head);
 
-  // A working-tree head never warns: last_commit cannot tell whether the index has it.
   const warnings: string[] = [];
   if (side === "base" && repo.last_commit !== base) {
     warnings.push(
@@ -292,6 +345,11 @@ export async function detectChanges(
       `Index of ${repoName} is at ${short(repo.last_commit)}, but the diff's head is ${short(head)}: ` +
         `head-side line ranges may not match the indexed symbols. Reindex at the head, or pass side "base" for an index of the base.`,
     );
+  } else if (side === "head" && headNow && repo.last_commit !== headNow) {
+    warnings.push(
+      `Index of ${repoName} is at ${short(repo.last_commit)}, but the working tree is on ${short(headNow)}: ` +
+        `head-side line ranges may not match the indexed symbols. Reindex the working tree, or pass side "base" for an index of the base.`,
+    );
   }
   for (const w of warnings) tracer?.recordWarning(w);
 
@@ -300,11 +358,12 @@ export async function detectChanges(
   const diff = parseGitDiff(diffText);
   // Head side matches one bounding range per file but checks containers against the exact lines.
   const ranges: Map<string, LineRange[]> = side === "base" ? diff.baseFiles : boundingRanges(diff.files);
-  const containerRanges = side === "base" ? new Map<string, LineRange[]>() : lineRuns(diff.files);
+  const containerRanges: Map<string, BaseRange[]> = side === "base" ? new Map() : lineRuns(diff.files);
   tracer?.setDiff(ranges.size, diff.addedLines, diff.removedLines);
 
   const tSymbolStart = performance.now();
   const overlapping: ChangedSymbol[] = [];
+  const fileSymbols: ChangedSymbol[] = [];
   for (const [filePath, rawRanges] of ranges) {
     if (rawRanges.length === 0) {
       tracer?.recordFileSymbols(filePath, 0);
@@ -322,11 +381,12 @@ export async function detectChanges(
     );
     const fileRanges = side === "base" ? attributeAnnotationInsertions(rawRanges, symbols) : rawRanges;
     if (side === "base") containerRanges.set(filePath, fileRanges);
+    fileSymbols.push(...symbols);
     const hit = symbols.filter((s) => fileRanges.some((r) => rangeHits(r, s)));
     tracer?.recordFileSymbols(filePath, hit.length);
     overlapping.push(...hit);
   }
-  const { kept: changedSymbols, dropped } = dropEnclosingContainers(overlapping, containerRanges);
+  const { kept: changedSymbols, dropped } = dropEnclosingContainers(overlapping, containerRanges, fileSymbols);
   const droppedContainers = dropped.map((s) => s.qualified_name);
   for (const qn of droppedContainers) tracer?.recordDroppedContainer(qn);
   tracer?.recordTiming("symbolResolution", performance.now() - tSymbolStart);

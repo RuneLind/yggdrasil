@@ -93,6 +93,27 @@ describe("resolveDiffSides", () => {
     }
   });
 
+  test("an annotated tag resolves to its commit on either side and as a single ref", async () => {
+    await git(dir, "tag", "-a", "v0", "-m", "v0", c0);
+    await git(dir, "tag", "-a", "v2", "-m", "v2", c2);
+    try {
+      expect(await resolveDiffSides(dir, "v0")).toEqual({ base: c0, head: null });
+      expect(await resolveDiffSides(dir, "v0...v2")).toEqual({ base: c0, head: c2 });
+      expect(await resolveDiffSides(dir, "v2..main")).toEqual({ base: c2, head: c1 });
+    } finally {
+      await git(dir, "tag", "-d", "v0", "v2");
+    }
+  });
+
+  test("a directory that is not a git repo → throws instead of diffing against the empty tree", async () => {
+    const plain = await mkdtemp(join(tmpdir(), "yggdrasil-nogit-"));
+    try {
+      await expect(resolveDiffSides(plain)).rejects.toThrow(/resolving ref 'HEAD'/);
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+
   test("a ref that does not exist → throws, naming the ref", async () => {
     await expect(resolveDiffSides(dir, "no-such-ref")).rejects.toThrow(/no-such-ref/);
     await expect(resolveDiffSides(dir, "main...no-such-ref")).rejects.toThrow(/no-such-ref/);
