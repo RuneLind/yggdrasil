@@ -18,6 +18,7 @@ const OV_USER = "src/main/java/no/nav/test/OvBruker.java";
 // Over 200 characters, so the stored signature is cut before `f(` and its first `(` is
 // the annotation's, which holds two arguments.
 const LONG = "x".repeat(220);
+const PORT = "src/main/java/no/nav/test/Port.java";
 
 describe.skipIf(!RUN)("eval-callers on a fixture repo", () => {
   let repo: FixtureRepo;
@@ -52,6 +53,20 @@ public class Ov {
     public static void g(int a, int b) {}
     public static void h(String s) {}
     public static void h(long a) {}
+}
+`,
+      [PORT]: `package no.nav.test;
+
+public interface Port {
+    void send(String s);
+}
+
+class PortImpl implements Port {
+    public void send(String s) {}
+}
+
+class PortBruker {
+    void bruk(Port p) { p.send("x"); }
 }
 `,
       [OV_USER]: `package no.nav.test;
@@ -150,6 +165,18 @@ public class OvBruker {
     );
     expect(r.stdout).not.toContain("not disambiguated");
     expect(r.stdout).toMatch(/production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
+  });
+
+  test("an implementation in impact (edge_kind overrides) is not scored as a caller", async () => {
+    const r = await runEval(
+      await tempFixture(
+        JSON.stringify({
+          repo: repo.name,
+          symbols: [{ qualified_name: "no.nav.test.Port.send", file: PORT, callers: [{ signature: "PortBruker.bruk(Port)", file: PORT }] }],
+        }),
+      ),
+    );
+    expect(r.stdout).toMatch(/impact depth 1\):\s+production\s+recall 100% \(1\/1\)\s+precision 100% \(1\/1\)/);
   });
 
   test("a symbol missing from the index gets no file-mismatch note", async () => {

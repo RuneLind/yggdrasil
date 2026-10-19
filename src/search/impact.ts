@@ -27,12 +27,19 @@ export interface ImpactEntry {
   edge_kind: string;
   /** How the edge that reached this entry was resolved; null for extends/implements/imports. */
   resolution: EdgeResolution | null;
+  /**
+   * The ancestor method this entry's call went through: it calls `via`, which the
+   * changed method (or a symbol on its path) overrides. Null for a direct edge.
+   */
+  via: string | null;
+  via_id: string | null;
   confidence: number;
   archetype: Archetype;
 }
 
 /**
- * Confidence scoring by depth. Structural edges (extends/implements) get a boost.
+ * Confidence scoring by depth. Structural edges (extends/implements/overrides) get a
+ * boost; a dispatched caller (via set) scores like a direct one.
  * Depth 0 = the changed symbol itself (never present in the blast radius — the
  * traversal seeds direct callers at depth 1, see getImpact). So in practice the
  * lowest depth seen here is 1 (direct callers → 0.7); the depth-0 → 1.0 entry stays
@@ -42,7 +49,7 @@ export function confidenceScore(depth: number, edgeKind: string): number {
   const baseScore: Record<number, number> = { 0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2 };
   const base = baseScore[depth] ?? 0.1;
   const structuralBoost =
-    edgeKind === "extends" || edgeKind === "implements" ? 0.2 : 0;
+    edgeKind === "extends" || edgeKind === "implements" || edgeKind === "overrides" ? 0.2 : 0;
   return Math.min(1.0, base + structuralBoost);
 }
 
@@ -132,6 +139,8 @@ async function impactForTarget(
     depth: r.depth,
     edge_kind: r.edge_kind,
     resolution: r.resolution,
+    via: r.via,
+    via_id: r.via_id,
     confidence: confidenceScore(r.depth, r.edge_kind),
     archetype: classifyArchetype(r),
   }));
@@ -164,7 +173,9 @@ async function impactForTarget(
         qualifiedName: a.qualified_name,
         kind: a.kind,
         depth: a.depth,
+        edgeKind: a.edge_kind,
         resolution: a.resolution,
+        via: a.via,
         confidence: a.confidence,
       })),
     );

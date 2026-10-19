@@ -39,6 +39,9 @@ export interface SymbolInsert {
   param_types?: (string | null)[] | null;
   param_names?: (string | null)[] | null;
   extension_receiver?: string | null;
+  is_local?: boolean;
+  type_params?: string[] | null;
+  param_type_vars?: (string | null)[] | null;
 }
 
 export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<string[]> {
@@ -64,6 +67,9 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
         param_types: s.param_types ?? null,
         param_names: s.param_names ?? null,
         extension_receiver: s.extension_receiver ?? null,
+        is_local: s.is_local ?? false,
+        type_params: s.type_params ?? null,
+        param_type_vars: s.param_type_vars ?? null,
       })),
       "file_id",
       "name",
@@ -82,6 +88,9 @@ export async function insertSymbolsBatch(symbols: SymbolInsert[]): Promise<strin
       "param_types",
       "param_names",
       "extension_receiver",
+      "is_local",
+      "type_params",
+      "param_type_vars",
     )}
     RETURNING id
   `;

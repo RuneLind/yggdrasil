@@ -146,7 +146,8 @@ async function main() {
     const impactFound = new Set<string>();
     for (const id of ids) {
       const impact = await analyzeImpactBySymbolId(id, { maxDepth: 1 });
-      for (const a of impact?.affected ?? []) impactFound.add(callerKey(a.file_path, a.name));
+      // An implementation listed as `overrides` is affected but is not a caller.
+      for (const a of impact?.affected ?? []) if (a.edge_kind !== "overrides") impactFound.add(callerKey(a.file_path, a.name));
     }
 
     const edgeRows = ids.length
