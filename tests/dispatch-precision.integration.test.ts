@@ -31,11 +31,54 @@ async function overridesFrom(repo: FixtureRepo, source: string): Promise<string[
   return (await repo.edgesFrom(source, "overrides")).map((e) => `${e.sourceLine}->${e.target}:${e.targetLine}`).sort();
 }
 
+/**
+ * VIA_GROUPS groups of one class reaching m() through three interfaces at the same depth.
+ * Only the qualified-name tiebreak picks Alfa in every group: by id, each group would
+ * pick Alfa with chance 1/3, all of them with chance 3^-10.
+ */
+const VIA_GROUPS = 10;
+const viaGroups = (): Record<string, string> =>
+  Object.fromEntries(Array.from({ length: VIA_GROUPS }, (_, g) => [`src/main/kotlin/no/nav/dp/V${g}.kt`, `package ${P}
+
+interface V${g}Zeta { fun m(): String }
+interface V${g}Beta { fun m(): String }
+interface V${g}Alfa { fun m(): String }
+
+class V${g}To : V${g}Zeta, V${g}Beta, V${g}Alfa {
+    override fun m(): String = ""
+}
+
+class V${g}Bruk(private val z: V${g}Zeta, private val b: V${g}Beta, private val a: V${g}Alfa) {
+    fun alle(): String = z.m() + b.m() + a.m()
+}
+`]));
+
 describe.skipIf(!RUN)("dispatch in impact", () => {
   let repo: FixtureRepo;
 
   beforeAll(async () => {
     repo = await createFixtureRepo({
+      ...viaGroups(),
+      // DX is the file's last declaration, so the grammar parses its body as a lambda.
+      "src/main/kotlin/no/nav/dp/Deleger.kt": `package ${P}
+
+interface DI {
+    fun foo(): String
+}
+
+class DC(private val i: DI) {
+    fun use(): String {
+        return i.foo()
+    }
+}
+
+class DX(private val d: DI) : DI by d {
+
+    override fun foo(): String {
+        return "x"
+    }
+}
+`,
       "src/main/kotlin/no/nav/dp/Base.kt": `package ${P}
 
 open class Base {
@@ -265,6 +308,14 @@ class Service : AbstraktService() {
 
   test("two ancestors at the same depth: via is the first by qualified name", async () => {
     expect(await impactRows(repo, `${P}.To.m`, 12, 1)).toEqual([`${P}.ToBruk.begge|1|calls|${P}.Alfa.m`]);
+    for (let g = 0; g < VIA_GROUPS; g++) {
+      expect(await impactRows(repo, `${P}.V${g}To.m`, 8, 1)).toEqual([`${P}.V${g}Bruk.alle|1|calls|${P}.V${g}Alfa.m`]);
+    }
+  });
+
+  test("a Kotlin class delegating to an interface overrides it, and dispatch reaches its callers", async () => {
+    expect(await overridesFrom(repo, `${P}.DX.foo`)).toEqual([`15->${P}.DI.foo:4`]);
+    expect(await impactRows(repo, `${P}.DX.foo`, 15, 1)).toEqual([`${P}.DC.use|1|calls|${P}.DI.foo`]);
   });
 
   test("a dispatched call beats an overrides edge at the same depth", async () => {

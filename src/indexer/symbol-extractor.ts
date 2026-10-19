@@ -239,10 +239,21 @@ function enclosingScope(node: SyntaxNode, parent: ExtractedSymbol | null): { loc
   let companion = false;
   for (let n = node.parent; n; n = n.parent) {
     if (parent && n.startIndex === parent.startIndex && n.endIndex === parent.endIndex) break;
-    if (LOCAL_SCOPES.has(n.type)) local = true;
+    if (LOCAL_SCOPES.has(n.type) && !isDelegatedClassBody(n)) local = true;
     if (n.type === "companion_object") companion = true;
   }
   return { local, companion };
+}
+
+/**
+ * tree-sitter-kotlin parses the body of `class X(d: I) : I by d { … }` as a trailing
+ * lambda on the delegate (`explicit_delegation > call_expression > annotated_lambda >
+ * lambda_literal`) when the class is the last declaration in its file. That lambda is
+ * the class body; a lambda nested in the delegate (`I by make { … } { … }`) is not.
+ */
+function isDelegatedClassBody(n: SyntaxNode): boolean {
+  // A LOCAL_SCOPES node three levels below explicit_delegation is only that lambda.
+  return n.parent?.parent?.parent?.type === "explicit_delegation";
 }
 
 /** `import a.b.C`, `import a.b.*`, `import a.b.C as D`, read from the AST. */
