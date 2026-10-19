@@ -1,132 +1,72 @@
 import { describe, test, expect } from "bun:test";
-import {
-  attributeAnnotationInsertions,
-  compareAffected,
-  dropEnclosingContainers,
-  dropLocalFields,
-  mergeAffected,
-} from "../src/search/detect-changes.ts";
+import { compareAffected, dropLocalFields, mergeAffected, selectChangedSymbols } from "../src/search/detect-changes.ts";
 import type { ImpactEntry } from "../src/search/impact.ts";
 
 const sym = (id: string, kind: string, parent_id: string | null, start_line: number, end_line: number) => ({
   id, kind, parent_id, start_line, end_line, file_path: "A.kt",
 });
 
-/**
- * Class at 1-20 with a field (3), a method (5-9) and a method (11-15).
- * Header is line 1, the closing brace line 20.
- */
-describe("dropEnclosingContainers", () => {
+/** Without a parsed file (a TypeScript file, an unreadable blob), member spans from the index decide. */
+describe("selectChangedSymbols without an AST", () => {
   const cls = sym("c", "class", null, 1, 20);
   const field = sym("f", "property", "c", 3, 3);
   const m1 = sym("m1", "method", "c", 5, 9);
   const m2 = sym("m2", "method", "c", 11, 15);
-  const ranges = (...r: Array<[number, number]>) => new Map([["A.kt", r.map(([start, end]) => ({ start, end }))]]);
-  const keptIds = (symbols: ReturnType<typeof sym>[], r: ReturnType<typeof ranges>) =>
-    dropEnclosingContainers(symbols, r).kept.map((s) => s.id);
+  const run = (...ranges: Array<[number, number]>) => {
+    const { changed, reasons } = selectChangedSymbols([
+      { symbols: [cls, field, m1, m2], ranges: ranges.map(([start, end]) => ({ start, end })), indexed: null, head: null },
+    ]);
+    return { changed: changed.map((s) => s.id), reasons: Object.fromEntries(reasons) };
+  };
 
-  test("drops the class when every hit lies inside its methods", () => {
-    const { kept, dropped } = dropEnclosingContainers([cls, m1, m2], ranges([6, 7], [12, 12]));
-    expect(kept.map((s) => s.id)).toEqual(["m1", "m2"]);
-    expect(dropped.map((s) => s.id)).toEqual(["c"]);
+  test("a hit inside a method drops the class", () => {
+    expect(run([6, 7])).toEqual({ changed: ["m1"], reasons: {} });
   });
 
-  test("keeps the class when a hit falls on its header, even next to a method hit", () => {
-    expect(keptIds([cls, m1], ranges([1, 1], [6, 6]))).toEqual(["c", "m1"]);
+  test("a changed line outside every member keeps the class as unknown", () => {
+    expect(run([10, 10], [6, 6])).toEqual({ changed: ["c", "m1"], reasons: { c: "unknown" } });
+    expect(run([3, 3], [6, 6])).toEqual({ changed: ["c", "f", "m1"], reasons: { c: "unknown" } });
   });
 
-  test("keeps the class when a hit falls on a field", () => {
-    expect(keptIds([cls, field, m1], ranges([3, 3], [6, 6]))).toEqual(["c", "f", "m1"]);
+  test("an insertion inside a method drops the class; one between members keeps it", () => {
+    expect(run([7, 6])).toEqual({ changed: ["m1"], reasons: {} });
+    expect(run([11, 10], [6, 6])).toEqual({ changed: ["c", "m1"], reasons: { c: "unknown" } });
   });
 
-  // Base-side ranges carry the old-side text of their lines (`removed`) and an insertion's
-  // new-side text (`inserted`); a range without text counts every uncovered line.
-  const all = [cls, field, m1, m2];
-  const r = (start: number, end: number, text: { removed?: string[]; inserted?: string[] } = {}) => ({ start, end, ...text });
-  const at = (...rs: ReturnType<typeof r>[]) => new Map([["A.kt", rs]]);
-  const keptOf = (hit: ReturnType<typeof sym>[], rs: ReturnType<typeof at>) =>
-    dropEnclosingContainers(hit, rs, all).kept.map((s) => s.id);
-
-  test("drops the class when one hunk runs past a method into the blank line after it", () => {
-    expect(keptOf([cls, m1], at(r(8, 10, { removed: ["        x()", "    }", ""] })))).toEqual(["m1"]);
-  });
-
-  test("drops the class when a new method is inserted between two changed methods", () => {
-    const fn = ["    fun n(): Int {", "        val q = 1", "        return q", "    }", ""];
-    const rs = at(r(6, 6, { removed: ["a"] }), r(11, 10, { inserted: fn }), r(12, 12, { removed: ["b"] }));
-    expect(keptOf([cls, m1, m2], rs)).toEqual(["m1", "m2"]);
-  });
-
-  test("drops the class when a deleted method takes its blank separator with it", () => {
-    const deleted = ["", "    fun b(): Int {", "        return 2", "", "    }", "    // slutt"];
-    expect(keptOf([cls, m1, m2], at(r(10, 15, { removed: deleted }), r(6, 6, { removed: ["a"] })))).toEqual(["m1", "m2"]);
-  });
-
-  test("drops the class when only a KDoc outside its members changed", () => {
-    expect(keptOf([cls], at(r(10, 10, { removed: ["    /** Gammel doc. */"] })))).toEqual([]);
-    expect(dropEnclosingContainers([cls], at(r(10, 10, { removed: ["     * gammel linje"] })), all).dropped.map((s) => s.id)).toEqual(["c"]);
-  });
-
-  test("keeps the class when its header changed, next to a changed method", () => {
-    expect(keptOf([cls, m1], at(r(1, 1, { removed: ["class A(val x: Int) {"] }), r(6, 6, { removed: ["a"] })))).toEqual(["c", "m1"]);
-  });
-
-  test("keeps the class when a field is inserted between members", () => {
-    expect(keptOf([cls, m1], at(r(6, 6, { removed: ["a"] }), r(11, 10, { inserted: ["    val ny = 5", ""] })))).toEqual(["c", "m1"]);
-    expect(keptOf([cls], at(r(11, 10, { inserted: ["    @Autowired", "    private lateinit var repo: Repo"] })))).toEqual(["c"]);
-    expect(keptOf([cls], at(r(11, 10, { inserted: ["    private final Logger log = LoggerFactory.getLogger(A.class);"] })))).toEqual(["c"]);
-  });
-
-  test("a computed property inserted between members drops the class, like a method", () => {
-    const prop = ["    /** Sum. */", "    val total: BigDecimal", "        get() = a.add(b)", ""];
-    expect(keptOf([cls], at(r(11, 10, { inserted: prop })))).toEqual([]);
-    const stored = ["    var teller: Int = 0", "        get() = field"];
-    expect(keptOf([cls], at(r(11, 10, { inserted: stored })))).toEqual(["c"]);
-  });
-
-  test("keeps the class when code is inserted before its first member, but not a comment", () => {
-    expect(keptOf([cls], at(r(3, 2, { inserted: ["    fun foerst() = 0"] })))).toEqual(["c"]);
-    expect(keptOf([cls], at(r(3, 2, { inserted: ["    // kommentar", ""] })))).toEqual([]);
-  });
-
-  test("a method inserted after the fields, before the first method, drops the class", () => {
-    expect(keptOf([cls], at(r(5, 4, { inserted: ["    fun foerst() = 0", ""] })))).toEqual([]);
-  });
-
-  test("a hunk running past the container's end or start counts only the container's own lines", () => {
+  test("a hunk running past the container counts only the container's own lines", () => {
     const k = sym("k", "class", null, 10, 20);
     const head = sym("kh", "method", "k", 10, 15);
     const tail = sym("kt", "method", "k", 16, 20);
-    const lines = (n: number) => Array.from({ length: n }, () => "x()");
-    expect(dropEnclosingContainers([k, tail], at(r(18, 25, { removed: lines(8) })), [k, head, tail]).dropped.map((s) => s.id)).toEqual(["k"]);
-    expect(dropEnclosingContainers([k, head], at(r(6, 12, { removed: lines(7) })), [k, head, tail]).dropped.map((s) => s.id)).toEqual(["k"]);
-  });
-
-  test("keeps a class without non-field members even when no exact range hits it", () => {
-    expect(dropEnclosingContainers([cls, field], new Map()).kept.map((s) => s.id)).toEqual(["c", "f"]);
-  });
-
-  test("an insertion between two lines of a method counts as inside it", () => {
-    expect(keptIds([cls, m1], ranges([7, 6]))).toEqual(["m1"]);
-  });
-
-  test("a method inserted just after a method's closing brace drops the class", () => {
-    expect(keptOf([cls], at(r(10, 9, { inserted: ["", "    fun ny() = 1"] })))).toEqual([]);
-  });
-
-  test("keeps a class without changed members", () => {
-    expect(keptIds([cls], ranges([1, 1]))).toEqual(["c"]);
-  });
-
-  test("keeps a method whose local function overlaps (only container kinds drop)", () => {
-    const local = sym("l", "function", "m1", 6, 7);
-    expect(keptIds([m1, local], ranges([6, 6]))).toEqual(["m1", "l"]);
+    const top = sym("top", "function", null, 21, 25);
+    const { changed } = selectChangedSymbols([
+      { symbols: [k, head, tail, top], ranges: [{ start: 18, end: 25 }], indexed: null, head: null },
+    ]);
+    expect(changed.map((s) => s.id)).toEqual(["kt", "top"]);
   });
 
   test("drops every enclosing level for a method in a nested class", () => {
     const inner = sym("i", "class", "c", 4, 16);
     const innerMethod = sym("im", "function", "i", 6, 8);
-    expect(keptIds([cls, inner, innerMethod], ranges([7, 7]))).toEqual(["im"]);
+    const { changed, dropped } = selectChangedSymbols([
+      { symbols: [cls, inner, innerMethod], ranges: [{ start: 7, end: 7 }], indexed: null, head: null },
+    ]);
+    expect(changed.map((s) => s.id)).toEqual(["im"]);
+    expect(dropped.map((s) => s.id)).toEqual(["c", "i"]);
+  });
+
+  test("keeps a method whose local function overlaps (only container kinds drop)", () => {
+    const local = sym("l", "function", "m1", 6, 7);
+    const { changed } = selectChangedSymbols([{ symbols: [m1, local], ranges: [{ start: 6, end: 6 }], indexed: null, head: null }]);
+    expect(changed.map((s) => s.id)).toEqual(["m1", "l"]);
+  });
+
+  test("head side: the bounding range selects symbols, the exact lines classify the class", () => {
+    const gap = sym("gap", "method", "c", 10, 10);
+    const { changed } = selectChangedSymbols([
+      { symbols: [cls, m1, gap, m2], ranges: [{ start: 6, end: 6 }, { start: 12, end: 12 }], match: [{ start: 6, end: 12 }], indexed: null, head: null },
+    ]);
+    // gap lies only inside the bounding range; the class is dropped since both exact lines are in methods.
+    expect(changed.map((s) => s.id)).toEqual(["m1", "gap", "m2"]);
   });
 });
 
@@ -146,37 +86,6 @@ describe("dropLocalFields", () => {
   test("drops a local val on the function's first line", () => {
     const symbols = [sym("m", "method", "c", 5, 9), sym("first", "property", "m", 5, 5)];
     expect(dropLocalFields(symbols).map((s) => s.id)).toEqual(["m"]);
-  });
-});
-
-describe("attributeAnnotationInsertions", () => {
-  const symbols = [sym("c", "class", null, 1, 20), sym("m", "method", "c", 11, 15)];
-
-  test("an annotation inserted right above a method becomes a hit on the method's first line", () => {
-    expect(attributeAnnotationInsertions([{ start: 11, end: 10, inserted: ['    @Deprecated("x")'] }], symbols)).toEqual([
-      { start: 11, end: 11 },
-    ]);
-  });
-
-  test("an insertion that is not only annotations stays an insertion point", () => {
-    const r = { start: 11, end: 10, inserted: ["    @Test", "    fun ny() {}"] };
-    expect(attributeAnnotationInsertions([r], symbols)).toEqual([r]);
-  });
-
-  test("a blank line inside an inserted annotation block is ignored", () => {
-    expect(attributeAnnotationInsertions([{ start: 11, end: 10, inserted: ["    @Deprecated", "   "] }], symbols)).toEqual([
-      { start: 11, end: 11 },
-    ]);
-  });
-
-  test("a blank-only insertion above a method stays an insertion point", () => {
-    const r = { start: 11, end: 10, inserted: ["", "  "] };
-    expect(attributeAnnotationInsertions([r], symbols)).toEqual([r]);
-  });
-
-  test("an annotation inserted where no symbol starts stays an insertion point", () => {
-    const r = { start: 10, end: 9, inserted: ["    @Deprecated"] };
-    expect(attributeAnnotationInsertions([r], symbols)).toEqual([r]);
   });
 });
 
@@ -264,3 +173,85 @@ describe("mergeAffected", () => {
     expect(merged.map((m) => m.id)).toEqual(["near", "deep", "imp"]);
   });
 });
+
+/**
+ * compareAffected is a total order, so mergeAffected keeps the same entry for an id in any
+ * input order. Each test pins one key: swapping or dropping it flips the expected order.
+ */
+describe("compareAffected total order", () => {
+  type E = { edge_kind: string; confidence: number; depth: number; resolution?: string | null; via?: string | null; via_id?: string | null; qualified_name?: string; id?: string };
+  const base: E = { edge_kind: "calls", confidence: 0.4, depth: 2, resolution: "typed", via: null, via_id: null, qualified_name: "p.x", id: "1" };
+  const e = (over: Partial<E>): E => ({ ...base, ...over });
+  const firstOf = (a: E, b: E) => {
+    const one = [a, b].sort(compareAffected)[0];
+    const two = [b, a].sort(compareAffected)[0];
+    expect(two).toBe(one);
+    return one;
+  };
+
+  test("confidence ranks above edge kind: an override at 0.7 before a call at 0.4", () => {
+    expect(firstOf(e({ edge_kind: "calls", confidence: 0.4 }), e({ edge_kind: "overrides", confidence: 0.7 })).edge_kind).toBe("overrides");
+  });
+
+  test("extends before implements at equal confidence", () => {
+    expect(firstOf(e({ edge_kind: "implements", confidence: 0.9, depth: 1 }), e({ edge_kind: "extends", confidence: 0.9, depth: 1 })).edge_kind).toBe("extends");
+  });
+
+  test("an unknown edge kind after implements, and two unknown kinds by name", () => {
+    expect(firstOf(e({ edge_kind: "uses" }), e({ edge_kind: "implements" })).edge_kind).toBe("implements");
+    expect(firstOf(e({ edge_kind: "uses" }), e({ edge_kind: "binds" })).edge_kind).toBe("binds");
+  });
+
+  test("same kind and confidence: the shallower entry first, whatever its name", () => {
+    expect(firstOf(e({ depth: 3, qualified_name: "p.a" }), e({ depth: 2, qualified_name: "p.b" })).depth).toBe(2);
+  });
+
+  test("then resolution: local, static, super, typed, chain, then unknown, then none", () => {
+    const order = ["local", "static", "super", "typed", "chain", "zeta", null];
+    for (let i = 0; i + 1 < order.length; i++) {
+      expect(firstOf(e({ resolution: order[i + 1], qualified_name: "p.a" }), e({ resolution: order[i], qualified_name: "p.b" })).resolution).toBe(order[i]);
+    }
+    expect(firstOf(e({ resolution: "zz" }), e({ resolution: "za" })).resolution).toBe("za");
+  });
+
+  test("then a direct edge before one via an ancestor, then via by name", () => {
+    expect(firstOf(e({ via: "p.Base.run", qualified_name: "p.a" }), e({ via: null, qualified_name: "p.b" })).via).toBeNull();
+    expect(firstOf(e({ via: "p.B.run", qualified_name: "p.a" }), e({ via: "p.A.run", qualified_name: "p.b" })).via).toBe("p.A.run");
+    expect(firstOf(e({ via: "p.A.run", via_id: "9", qualified_name: "p.a" }), e({ via: "p.A.run", via_id: "3", qualified_name: "p.b" })).via_id).toBe("3");
+  });
+
+  test("then qualified name, then id", () => {
+    expect(firstOf(e({ qualified_name: "p.b", id: "1" }), e({ qualified_name: "p.a", id: "2" })).qualified_name).toBe("p.a");
+    expect(firstOf(e({ id: "2" }), e({ id: "1" })).id).toBe("1");
+    expect(firstOf(e({ qualified_name: undefined }), e({ qualified_name: "p.z" })).qualified_name).toBe("p.z");
+  });
+});
+
+describe("mergeAffected is independent of input order", () => {
+  const entry = (over: Partial<ImpactEntry> & { via?: string | null }): ImpactEntry => ({
+    id: "x", name: "x", qualified_name: "p.x", kind: "class", file_path: "X.kt", repo_name: "r",
+    depth: 1, edge_kind: "calls", resolution: null, confidence: 0.9, archetype: "other", ...over,
+  } as ImpactEntry);
+  const permutations = <T,>(xs: T[]): T[][] =>
+    xs.length <= 1 ? [xs] : xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((rest) => [x, ...rest]));
+
+  test("a class that extends A and implements I, both changed, merges to extends in every order", () => {
+    const viaA = { changed: { id: "a", qualified_name: "p.A" }, affected: [entry({ edge_kind: "extends" })] };
+    const viaI = { changed: { id: "i", qualified_name: "p.I" }, affected: [entry({ edge_kind: "implements" })] };
+    for (const order of permutations([viaA, viaI])) expect(mergeAffected(order)[0].edge_kind).toBe("extends");
+  });
+
+  test("two calls of one id differing in resolution and via merge to the same entry in every order", () => {
+    const inputs = [
+      { changed: { id: "s1", qualified_name: "p.S.a" }, affected: [entry({ confidence: 0.7, resolution: "typed", via: "p.B.run" })] },
+      { changed: { id: "s2", qualified_name: "p.S.b" }, affected: [entry({ confidence: 0.7, resolution: "local", via: "p.B.run" })] },
+      { changed: { id: "s3", qualified_name: "p.S.c" }, affected: [entry({ confidence: 0.7, resolution: "local", via: null })] },
+    ];
+    const results = permutations(inputs).map((order) => mergeAffected(order)[0]);
+    for (const r of results) {
+      expect(r.resolution).toBe("local");
+      expect((r as ImpactEntry & { via?: string | null }).via).toBeNull();
+    }
+  });
+});
+

@@ -511,8 +511,16 @@ describe.skipIf(!RUN)("detect_changes container rule against an index of the bas
     expect(await run("main...fld")).toEqual({ changed: ["p.C"], dropped: [] });
   });
 
-  test("a KDoc-only change outside members does not keep the class", async () => {
-    expect((await run("main...kdoc")).changed).not.toContain("p.C");
+  test("a KDoc-only change keeps the class only through the floor", async () => {
+    const result = await detectChanges(repo.name, { ref: "main...kdoc" });
+    expect(result!.changedSymbols.map((s) => s.qualified_name)).toEqual(["p.C"]);
+    expect(result!.keptContainers).toEqual([{ qualified_name: "p.C", reason: "floor" }]);
+  });
+
+  test("keptContainers names the hit kind that kept each container", async () => {
+    expect((await detectChanges(repo.name, { ref: "main...ctor" }))!.keptContainers).toEqual([{ qualified_name: "p.C", reason: "header" }]);
+    expect((await detectChanges(repo.name, { ref: "main...fld" }))!.keptContainers).toEqual([{ qualified_name: "p.C", reason: "state" }]);
+    expect((await detectChanges(repo.name, { ref: "main...ins" }))!.keptContainers).toEqual([]);
   });
 });
 
@@ -526,7 +534,7 @@ describe.skipIf(!RUN)("detect_changes with a single ref after checking out anoth
   let c0: string, f1: string;
 
   beforeAll(async () => {
-    repo = await createFixtureRepo({ [C_FILE]: C_BASE });
+    repo = await createFixtureRepo({ [C_FILE]: C_BASE, "notes.txt": "a\n" });
     await git(repo.path, "init", "-q", "-b", "main");
     await git(repo.path, "add", ".");
     await git(repo.path, "commit", "-q", "-m", "c0");
@@ -558,5 +566,221 @@ describe.skipIf(!RUN)("detect_changes with a single ref after checking out anoth
       expect(result?.warnings).toHaveLength(1);
       expect(result?.warnings[0]).toContain(`is at ${c0.slice(0, 7)}, but the working tree is on ${f1.slice(0, 7)}`);
     }
+  });
+
+  test("a diff of files the index does not hold verifies nothing, so the commit warning stays", async () => {
+    await writeFile(join(repo.path, "notes.txt"), "b\n");
+    try {
+      const result = await detectChanges(repo.name);
+      expect(result?.changedFiles).toEqual(["notes.txt"]);
+      expect(result?.warnings).toHaveLength(1);
+    } finally {
+      await git(repo.path, "checkout", "-q", "--", "notes.txt");
+    }
+  });
+});
+
+const KN_FILE = "src/main/kotlin/p/K.kt";
+const KN_BASE = `package p
+
+class K {
+    private val names = listOf(
+        "a",
+    )
+
+    init {
+        println("init")
+    }
+
+    fun m(): Int {
+        return 1
+    }
+}
+`;
+const KN_USER = `package q
+
+import p.K
+
+class KBruker {
+    fun bruk(): Int = K().m()
+}
+`;
+const JN_FILE = "src/main/java/p/J.java";
+const JN_BASE = `package p;
+
+import java.util.Map;
+
+public class J {
+    public int m() {
+        return 1;
+    }
+
+    private int retries = 3; // max
+    private static final Map<String, Integer> M = Map.of(
+        "a", 1
+    );
+
+    static {
+        init();
+    }
+
+    static void init() {}
+}
+`;
+const JN_USER = `package q;
+
+import p.J;
+
+public class JBruker {
+    public int bruk() {
+        return new J().m();
+    }
+}
+`;
+const PORT_FILE = "src/main/kotlin/p/Port.kt";
+const PORT_BASE = `package p
+
+interface Port {
+    fun a(): Int
+}
+`;
+const IMPL_FILE = "src/main/kotlin/q/Impl.kt";
+const IMPL_BASE = `package q
+
+import p.Port
+
+class Impl : Port {
+    override fun a(): Int = 1
+}
+`;
+
+/**
+ * The node-kind container rule end to end, one change per branch and no method edit, so a
+ * kept container shows its own hit kind (not the floor). Index at the base (main).
+ */
+describe.skipIf(!RUN)("detect_changes container rule by node kind, end to end", () => {
+  let repo: FixtureRepo;
+
+  const branch = async (name: string, file: string, content: string) => {
+    await git(repo.path, "checkout", "-q", "-b", name, "main");
+    await writeFile(join(repo.path, file), content);
+    await git(repo.path, "commit", "-q", "-am", name);
+    await git(repo.path, "checkout", "-q", "main");
+  };
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({
+      [KN_FILE]: KN_BASE, "src/main/kotlin/q/KBruker.kt": KN_USER,
+      [JN_FILE]: JN_BASE, "src/main/java/q/JBruker.java": JN_USER,
+      [PORT_FILE]: PORT_BASE, [IMPL_FILE]: IMPL_BASE,
+    });
+    await git(repo.path, "init", "-q", "-b", "main");
+    await git(repo.path, "add", ".");
+    await git(repo.path, "commit", "-q", "-m", "c0");
+    await repo.reindex();
+    await branch("kinit", KN_FILE, KN_BASE.replace('        println("init")\n', '        println("init")\n        println("mer")\n'));
+    await branch("kprop", KN_FILE, KN_BASE.replace('        "a",\n', '        "a",\n        "b",\n'));
+    await branch("kusesite", KN_FILE, KN_BASE.replace("    fun m(): Int {", '    @field:JsonProperty("y") val y = 2\n\n    fun m(): Int {'));
+    await branch("kmethod", KN_FILE, KN_BASE.replace("    fun m(): Int {", "    fun ny(): Int = 2\n\n    fun m(): Int {"));
+    await branch("jstatic", JN_FILE, JN_BASE.replace("        init();\n", "        init();\n        init();\n"));
+    await branch("jmapins", JN_FILE, JN_BASE.replace("Map.of(\n", 'Map.of(\n        "b", 2,\n'));
+    await branch("jtrail", JN_FILE, JN_BASE.replace("        return 1;\n    }\n", "        return 1;\n    }\n\n    private int x = 1; // x\n"));
+    await branch("kiface", PORT_FILE, PORT_BASE.replace("    fun a(): Int\n", "    fun a(): Int\n    fun b(): Int\n"));
+  });
+
+  afterAll(async () => {
+    await repo?.cleanup();
+  });
+
+  const cases: Array<[string, string[], string, string]> = [
+    ["kinit", ["p.K"], "state", "q.KBruker"],
+    ["kprop", ["p.K", "p.K.names"], "state", "q.KBruker"],
+    ["kusesite", ["p.K"], "state", "q.KBruker"],
+    ["kmethod", ["p.K"], "floor", "q.KBruker"],
+    ["jstatic", ["p.J"], "state", "q.JBruker"],
+    ["jmapins", ["p.J"], "state", "q.JBruker"],
+    ["jtrail", ["p.J"], "state", "q.JBruker"],
+    ["kiface", ["p.Port"], "contract", "q.Impl"],
+  ];
+  for (const [ref, changed, reason, caller] of cases) {
+    test(`${ref}: ${changed.join(", ")} kept as ${reason}, ${caller} affected`, async () => {
+      const result = await detectChanges(repo.name, { ref: `main...${ref}` });
+      expect(result?.side).toBe("base");
+      expect(result?.warnings).toEqual([]);
+      expect(result!.changedSymbols.map((s) => s.qualified_name)).toEqual(changed);
+      expect(result!.keptContainers).toEqual([{ qualified_name: changed[0], reason }]);
+      expect(result!.affectedSymbols.map((a) => a.qualified_name)).toContain(caller);
+    });
+  }
+
+  test("an abstract method inserted into an interface reaches its implementor through implements", async () => {
+    const result = await detectChanges(repo.name, { ref: "main...kiface" });
+    expect(result!.affectedSymbols.find((a) => a.qualified_name === "q.Impl")?.edge_kind).toBe("implements");
+  });
+});
+
+const D_FILE = "src/main/kotlin/p/K.kt";
+const D_BASE = `package p
+
+class K {
+    fun a(): Int {
+        return 1
+    }
+
+    fun b(): Int {
+        return 2
+    }
+
+    fun c(): Int {
+        return 3
+    }
+}
+`;
+// Line-shifting insert above c(), and an edit in c(): read against the base's line numbers,
+// c()'s edit (old line 13) lands inside n2 (lines 12-14 of the index).
+const D_EDITED = D_BASE.replace("    fun c(): Int {\n", "    fun n2(): Int {\n        return 0\n    }\n\n    fun c(): Int {\n").replace("return 3", "return 30");
+
+/**
+ * Single ref against an index built on a dirty tree that was committed afterwards: the
+ * index at X holds the edits, then they become commit Y. last_commit is X and HEAD is Y,
+ * so the commit rule alone picks base, but the index holds Y's content.
+ */
+describe.skipIf(!RUN)("detect_changes with an index of a dirty tree committed since", () => {
+  let repo: FixtureRepo;
+  let x: string, y: string;
+
+  beforeAll(async () => {
+    repo = await createFixtureRepo({ [D_FILE]: D_BASE });
+    await git(repo.path, "init", "-q", "-b", "main");
+    await git(repo.path, "add", ".");
+    await git(repo.path, "commit", "-q", "-m", "x");
+    x = await git(repo.path, "rev-parse", "HEAD");
+    await repo.reindex({ [D_FILE]: D_EDITED }); // last_commit = x, content = the edits
+    await git(repo.path, "commit", "-q", "-am", "y");
+    y = await git(repo.path, "rev-parse", "HEAD");
+  });
+
+  afterAll(async () => {
+    await repo?.cleanup();
+  });
+
+  test("ref X picks the head side, since the index holds the working tree's content", async () => {
+    const result = await detectChanges(repo.name, { ref: x });
+    expect(result?.side).toBe("head");
+    expect(result?.warnings).toEqual([]);
+    expect(result!.changedSymbols.map((s) => s.qualified_name)).toEqual(["p.K.n2", "p.K.c"]);
+  });
+
+  test("when the working tree moved on too, the side stays base and a warning names the content mismatch", async () => {
+    await writeFile(join(repo.path, D_FILE), D_EDITED.replace("return 2", "return 20"));
+    try {
+      const result = await detectChanges(repo.name, { ref: x });
+      expect(result?.side).toBe("base");
+      expect(result?.warnings).toHaveLength(1);
+      expect(result?.warnings[0]).toContain(`at the diff's base ${x.slice(0, 7)}, but 1 of 1 changed files hold other content than the base`);
+    } finally {
+      await git(repo.path, "checkout", "-q", "--", D_FILE);
+    }
+    expect(y).not.toBe(x);
   });
 });

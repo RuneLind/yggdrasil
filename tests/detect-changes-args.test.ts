@@ -42,7 +42,7 @@ describe("gitDiffArgs", () => {
       expect(await proc.exited).toBe(0);
       const ranges = parseGitDiff(diff).baseFiles.get("a.kt")!;
       expect(ranges.map((r) => [r.start, r.end])).toEqual([[2, 1], [4, 4]]);
-      expect(ranges[0].inserted).toEqual(["ny"]);
+      expect(ranges[0].headLines).toEqual({ start: 2, end: 2 });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

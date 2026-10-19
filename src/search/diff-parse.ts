@@ -21,12 +21,11 @@ export interface LineRange {
 }
 
 /**
- * An old-side hunk range. `removed` holds the text of its old-side lines (start..end);
- * an insertion-only hunk keeps its inserted (new-side) lines in `inserted` instead.
+ * An old-side hunk range. `headLines` is the hunk's new-side span (its `+` lines), absent
+ * when the hunk adds nothing; detect-changes classifies those lines in the head file.
  */
 export interface BaseRange extends LineRange {
-  inserted?: string[];
-  removed?: string[];
+  headLines?: LineRange;
 }
 
 export interface DiffSummary {
@@ -37,6 +36,8 @@ export interface DiffSummary {
    * (`--- /dev/null`) are absent, since an index of the base holds no symbols for them.
    */
   baseFiles: Map<string, BaseRange[]>;
+  /** Base path → head path (the new path of a rename), or null for a deleted file. */
+  headPaths: Map<string, string | null>;
   addedLines: number;
   removedLines: number;
 }
@@ -112,6 +113,7 @@ function headerPath(raw: string): string {
 export function parseGitDiff(text: string): DiffSummary {
   const files = new Map<string, Set<number>>();
   const baseFiles = new Map<string, BaseRange[]>();
+  const headPaths = new Map<string, string | null>();
   let addedLines = 0;
   let removedLines = 0;
 
@@ -119,14 +121,10 @@ export function parseGitDiff(text: string): DiffSummary {
   let currentOldFile: string | null = null;
   let pendingOldFile: string | null = null;
   let inHeader = false;
-  let inserting: string[] | null = null;
-  let removing: string[] | null = null;
 
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
       inHeader = true;
-      inserting = null;
-      removing = null;
       currentFile = null;
       currentOldFile = null;
       pendingOldFile = null;
@@ -141,27 +139,17 @@ export function parseGitDiff(text: string): DiffSummary {
 
     if (inHeader && line.startsWith("+++ ")) {
       // New-side path. "/dev/null" means a deleted file — fall back to the old path.
-      currentFile = line.startsWith("+++ /dev/null") ? pendingOldFile : headerPath(line.slice(4));
+      const deleted = line.startsWith("+++ /dev/null");
+      currentFile = deleted ? pendingOldFile : headerPath(line.slice(4));
       if (currentFile && !files.has(currentFile)) files.set(currentFile, new Set());
       currentOldFile = pendingOldFile;
       if (currentOldFile && !baseFiles.has(currentOldFile)) baseFiles.set(currentOldFile, []);
+      if (currentOldFile) headPaths.set(currentOldFile, deleted ? null : currentFile);
       inHeader = false;
       continue;
     }
 
-    if (inserting && line.startsWith("+")) {
-      inserting.push(line.slice(1));
-      continue;
-    }
-
-    if (removing && line.startsWith("-")) {
-      removing.push(line.slice(1));
-      continue;
-    }
-
     if (line.startsWith("@@ ") && currentFile) {
-      inserting = null;
-      removing = null;
       // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@  (counts default to 1)
       const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!match) continue;
@@ -184,14 +172,13 @@ export function parseGitDiff(text: string): DiffSummary {
         // git writes an empty old side as `-N,0`: zero lines *after* line N.
         const start = removed === 0 ? removedStart + 1 : removedStart;
         const range: BaseRange = { start, end: start + removed - 1 };
-        if (removed === 0) inserting = range.inserted = [];
-        else removing = range.removed = [];
+        if (added > 0) range.headLines = { start: addedStart, end: addedStart + added - 1 };
         baseFiles.get(currentOldFile)!.push(range);
       }
     }
   }
 
-  return { files, baseFiles, addedLines, removedLines };
+  return { files, baseFiles, headPaths, addedLines, removedLines };
 }
 
 /** Does `range` touch a symbol spanning [start_line, end_line]? See LineRange for empty ranges. */

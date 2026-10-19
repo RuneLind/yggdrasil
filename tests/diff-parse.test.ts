@@ -306,7 +306,7 @@ diff --git a/src/Keep.java b/src/Keep.java
     expect(baseObject(diff)).toEqual({ "src/Keep.java": [[2, 2]] });
   });
 
-  test("insertion-only hunk keeps its inserted text; other hunks carry none", () => {
+  test("each hunk carries its new-side span; a deletion-only hunk carries none", () => {
     const diff = `diff --git a/src/A.kt b/src/A.kt
 --- a/src/A.kt
 +++ b/src/A.kt
@@ -316,37 +316,38 @@ diff --git a/src/Keep.java b/src/Keep.java
 @@ -49,0 +50,2 @@
 +    @Deprecated("x")
 +    @Suppress("y")
+@@ -60,2 +61,0 @@
+-x
+-y
 \\ No newline at end of file`;
-    const ranges = parseGitDiff(diff).baseFiles.get("src/A.kt")!;
-    expect(ranges[0].inserted).toBeUndefined();
-    expect(ranges[1]).toEqual({ start: 50, end: 49, inserted: ['    @Deprecated("x")', '    @Suppress("y")'] });
+    expect(parseGitDiff(diff).baseFiles.get("src/A.kt")).toEqual([
+      { start: 3, end: 3, headLines: { start: 3, end: 3 } },
+      { start: 50, end: 49, headLines: { start: 50, end: 51 } },
+      { start: 60, end: 61 },
+    ]);
   });
 
-  test("an insertion hunk followed by an edit hunk keeps only its own inserted lines", () => {
-    const diff = `diff --git a/src/A.kt b/src/A.kt
---- a/src/A.kt
-+++ b/src/A.kt
-@@ -4,0 +5 @@
-+    val ny = 1
-@@ -9 +10 @@
--        return 2
-+        return 3`;
-    const ranges = parseGitDiff(diff).baseFiles.get("src/A.kt")!;
-    expect(ranges[0].inserted).toEqual(["    val ny = 1"]);
-  });
-
-  test("a hunk with removed lines keeps their old-side text", () => {
-    const diff = `diff --git a/src/A.kt b/src/A.kt
---- a/src/A.kt
-+++ b/src/A.kt
-@@ -7,2 +7 @@
--        return 2
--
-+        return 3
-@@ -20 +19,0 @@
--    // borte`;
-    const ranges = parseGitDiff(diff).baseFiles.get("src/A.kt")!;
-    expect(ranges.map((r) => r.removed)).toEqual([["        return 2", ""], ["    // borte"]]);
+  test("headPaths maps each base path to its head path: a rename's new path, null for a deleted file", () => {
+    const diff = `diff --git a/src/Old.java b/src/New.java
+rename from src/Old.java
+rename to src/New.java
+--- a/src/Old.java
++++ b/src/New.java
+@@ -7 +7 @@
+-a
++b
+diff --git a/src/Gone.java b/src/Gone.java
+deleted file mode 100644
+--- a/src/Gone.java
++++ /dev/null
+@@ -1 +0,0 @@
+-x
+diff --git a/src/Added.java b/src/Added.java
+--- /dev/null
++++ b/src/Added.java
+@@ -0,0 +1 @@
++y`;
+    expect(Object.fromEntries(parseGitDiff(diff).headPaths)).toEqual({ "src/Old.java": "src/New.java", "src/Gone.java": null });
   });
 
   test("deleted file (+++ /dev/null) → old path, old-side range", () => {

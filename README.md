@@ -201,14 +201,29 @@ An omitted side of a range is `HEAD`. A ref that git cannot resolve returns an e
 
 `side` selects which hunk lines are matched against the index:
 
-- `base` (review mode): old-side ranges, keyed on the `---` path. Renames resolve on the old path; added files have no base symbols. An insertion-only hunk (`@@ -N,0 …`) flags a symbol only when it contains both line N and line N+1, so code inserted inside a method body flags that method, and code inserted between two methods flags neither. The exception is an insertion made only of annotation lines (each starts with `@`) directly above a symbol, which flags that symbol.
+- `base` (review mode): old-side ranges, keyed on the `---` path. Renames resolve on the old path; added files have no base symbols. An insertion-only hunk (`@@ -N,0 …`) flags a symbol only when it contains both line N and line N+1, so code inserted inside a method body flags that method, and code inserted between two methods flags neither. The exception is lines inserted directly above a symbol that the head file shows as part of its declaration (annotations, modifiers): they flag that symbol.
 - `head`: new-side lines, keyed on the `+++` path.
 
-When you omit `side`, it is `base` for a two-sided ref (`a..b`, `a...b`, `X^!`, `X^-n`) when `ci_repos.last_commit` equals the resolved base, otherwise `head`. A single ref `a` diffs `a` against the working tree: it is `base` when `last_commit` equals `a` and the checked-out `HEAD` differs from `last_commit` (the index was built at `a` before the checkout), otherwise `head`, since the index may hold working-tree edits. No ref is always `head`. `warnings` reports an index whose commit differs from the side being matched; for a working-tree head, that is a `last_commit` other than the checked-out `HEAD`.
+When you omit `side`, it is `base` for a two-sided ref (`a..b`, `a...b`, `X^!`, `X^-n`) when `ci_repos.last_commit` equals the resolved base, otherwise `head`. A single ref `a` diffs `a` against the working tree: it is `base` when `last_commit` equals `a` and the checked-out `HEAD` differs from `last_commit` (the index was built at `a` before a checkout), otherwise `head`, since the index may hold working-tree edits. No ref is always `head`. The commit can match while the content does not, for example an index built on a dirty tree at `a` whose edits were committed afterwards, so the content hashes in `ci_files` of the diff's files are compared with the base blobs: when they differ and match the head instead, the automatic `base` becomes `head`. `warnings` reports an index whose commit differs from the side being matched (for a working-tree head, a `last_commit` other than the checked-out `HEAD`), or one at the base commit whose content differs from the base. When the index holds the matched side's content for every changed file it indexes, no warning is given.
 
-A class, interface, enum or object moves from `changedSymbols` to `droppedContainers` unless a change touches the container itself: a changed or deleted line outside its non-field members that is not blank or comment-only (header, primary constructor, a field), or an insertion that adds code before its first member or declares a field. A method inserted between members, a blank separator line, or a KDoc outside the members does not keep it. With `side: "head"`, every changed line outside the members keeps it. A `val` or field declared inside a method, function or constructor is not reported as a changed symbol.
+The container rule decides whether a class, interface, enum or object a change falls in stays in `changedSymbols` or moves to `droppedContainers`. Each hit inside a container (a changed or deleted base line, an insertion point, and the inserted or replacing lines read from the head file) is classified by the tree-sitter node of the class body it falls in, and `keptContainers` names the kind that kept each container:
 
-Each changed symbol's blast radius is computed by id, so overloads do not share callers. An affected symbol reached from several changed symbols appears once: it keeps the best edge (calls and overrides above imports, then confidence, then calls above overrides, then depth), and `changed_symbols` lists every changed symbol that reaches it.
+| Hit in | Kind | Keeps the container |
+|---|---|---|
+| The header: annotations, modifiers, name, type parameters, supertypes, the primary constructor, the `{` line | `header` | yes |
+| A stored property (initializer or delegate, or no accessor) or Java field, its initializer and annotations; an `init`, `static` or instance initializer block; a Kotlin secondary constructor; an enum entry | `state` | yes |
+| A function or method without a body (abstract or interface member) | `contract` | yes |
+| A node the rule does not name, or a parse error; in a file it cannot parse (not Java or Kotlin, or the blob is unreadable), any line outside the indexed members | `unknown` | yes |
+| A method or function with a body, a Java constructor, a nested class, a computed property (accessor, no initializer) | `member` | no |
+| A comment, a blank line, the closing `}` | `comment`, `blank` | no |
+
+An insertion inside a node counts as an edit of that node. An insertion between members is classified by the lines it adds, so an inserted field keeps the container, and an inserted method, computed property, nested class or comment does not. Lines inserted directly above a symbol that the head file shows as part of its declaration (annotations, modifiers) count as a hit on the symbol's first line. A companion object is read as part of its class.
+
+Floor: when every symbol a file's hits overlap is a dropped container, the innermost container of each hit stays, with `reason: "floor"`. A change the rule attributes to no member, such as a comment edit or an inserted method, does not erase the file's blast radius. A KDoc outside every symbol (above the class) hits nothing.
+
+With `side: "head"`, the rule classifies the exact new-side lines in the head file. A `val` or field declared inside a method, function or constructor is not reported as a changed symbol.
+
+Each changed symbol's blast radius is computed by id, so overloads do not share callers. An affected symbol reached from several changed symbols appears once: it keeps the best edge by a total order (any edge kind above imports, then confidence; calls, overrides, extends, implements; depth; resolution; a direct edge before one `via` an ancestor; qualified name; id), so the result does not depend on the order of the changed symbols, and `changed_symbols` lists every changed symbol that reaches it.
 
 ### Search algorithm
 

@@ -49,7 +49,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg → pointer-mode trace (see Tracing below) |
 | `symbol_context` | 360-degree view: callers, callees, inheritance |
 | `impact` | Blast radius with confidence scoring by depth. Each result carries the `resolution` of the edge that reached it and is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/config/util/builder/exception/other) via name+path heuristics. Optional `archetype_exclude` arg trims noise; `archetype_counts` on the response shows the pre-filter distribution. |
-| `detect_changes` | Git diff → changed symbols and their blast radius by symbol id (archetype, `edge_kind`, `resolution`, `changed_symbols`; calls/overrides above imports). `side: "base"` (review mode, default for a two-sided ref when `last_commit` is the diff's base) matches old-side hunk ranges against an index of the base; `side: "head"` matches new-side lines. A container moves to `droppedContainers` unless a change touches it outside its non-field members (not a blank/comment line, not a method inserted between members). Contract in README § detect_changes. |
+| `detect_changes` | Git diff → changed symbols and their blast radius by symbol id (archetype, `edge_kind`, `resolution`, `changed_symbols`; calls/overrides above imports). `side: "base"` (review mode, default for a two-sided ref when `last_commit` is the diff's base) matches old-side hunk ranges against an index of the base; `side: "head"` matches new-side lines. The container rule (`src/search/container-rule.ts`) classifies each hit by the tree-sitter node of the class body it falls in, on the base file and, for added lines, the head file: header, stored field/property, init/static block or bodiless member keep the container (`keptContainers`); methods, nested classes, computed properties, comments and blank lines drop it (`droppedContainers`); a file left with no changed symbol keeps its innermost container (`floor`). Contract in README § detect_changes. |
 | `analyze_ticket` | Ticket text → top candidate symbols, each bundled with caller/callee/inheritance context + blast radius + affected tests. One round-trip orchestration over `search`/`symbol_context`/`impact` (inherits archetype tagging). |
 | `file_outline` | All symbols in a file with hierarchy |
 | `read_source` | Read source code of an indexed file with line numbers |
@@ -142,7 +142,8 @@ src/
 │   ├── impact.ts            — blast radius traversal
 │   ├── archetype.ts         — name+path heuristics for arketype-tagging impact results
 │   ├── analyze-ticket.ts    — ticket → candidate symbols + context bundle
-│   └── detect-changes.ts    — git diff → affected symbols
+│   ├── detect-changes.ts    — git diff → affected symbols
+│   └── container-rule.ts    — tree-sitter node kinds for detect_changes' container rule
 ├── db/
 │   ├── connection.ts        — postgres connection
 │   ├── repos.ts             — ci_repos CRUD
