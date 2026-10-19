@@ -14,8 +14,8 @@ import { extensionToLanguage, initParser, loadLanguage, parseSource } from "../i
  * | Function or method without a body (abstract, interface) | contract |
  * | Function or method with a body, Java constructor, nested class, Kotlin computed property (accessor, no initializer) | member |
  * | Comment | comment |
- * | Nothing but whitespace or the closing `}` | blank |
- * | Any other node, a parse error | unknown |
+ * | No named node: whitespace, the closing `}`, a lone `;` | blank |
+ * | Any other named node: Kotlin `type_alias`, Java `compact_constructor_declaration` and `annotation_type_declaration`, a class-body `ERROR` | unknown |
  */
 export type HitKind = "header" | "state" | "contract" | "unknown" | "member" | "comment" | "blank";
 
@@ -105,7 +105,11 @@ export function containerPath(n: Node): string {
   return names.join(".");
 }
 
-/** The container node in `root` with the same containerPath, for the head file of a base container. */
+/**
+ * The first container node in `root` with the same containerPath, for the head file of a
+ * base container. Misses after a rename of the container or an enclosing one; of two
+ * containers with one path (local classes of one name), it takes the first.
+ */
 export function findContainerByPath(root: Node, path: string): Node | null {
   const visit = (n: Node): Node | null => {
     if (CONTAINER_NODES.has(n.type) && containerPath(n) === path) return n;

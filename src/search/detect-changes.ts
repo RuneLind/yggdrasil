@@ -165,7 +165,10 @@ function boundingRanges(files: Map<string, Set<number>>): Map<string, LineRange[
   return out;
 }
 
-/** Head-side hit lines as runs of consecutive lines, for the container check. */
+/**
+ * Head-side hit lines as runs of consecutive lines, for the container check. A
+ * deletion-only hunk contributes its old-side lines, which are then read in the head tree.
+ */
 function lineRuns(files: Map<string, Set<number>>): Map<string, LineRange[]> {
   const out = new Map<string, LineRange[]>();
   for (const [path, lines] of files) {
@@ -219,7 +222,10 @@ export function attributeDeclarationInsertions(
 export interface FileSelectionInput<T extends FileSymbol> {
   /** All indexed symbols of the file. */
   symbols: T[];
-  /** Exact hit ranges in the index's line numbers (base side: one per hunk, with headLines). */
+  /**
+   * Hit ranges (base side: one old-side range per hunk, with headLines; head side: runs of
+   * new-side lines, and a deletion-only hunk's old-side lines).
+   */
   ranges: BaseRange[];
   /** Ranges that select the hit symbols when they differ from `ranges` (head side: the bounding range). */
   match?: LineRange[];
@@ -232,7 +238,10 @@ export interface FileSelectionInput<T extends FileSymbol> {
 /** Why a container stayed in changedSymbols: the hit kind that kept it, or the floor. */
 export type KeepReason = HitKind | "floor";
 
-/** Hit kinds of range `r` against container `c` without an AST: a member's lines or unknown. */
+/**
+ * Hit kinds of range `r` against container `c` without a container node (no AST, or none at
+ * c's lines): a line in a child other than a field or property is member, any other unknown.
+ */
 function spanKinds(c: Spanned, r: BaseRange, symbols: FileSymbol[]): HitKind[] {
   const members = symbols.filter((s) => s.parent_id === c.id && !FIELD_KINDS.has(s.kind));
   if (r.end < r.start) return [members.some((m) => rangeHits(r, m)) ? "member" : "unknown"];
@@ -243,7 +252,10 @@ function spanKinds(c: Spanned, r: BaseRange, symbols: FileSymbol[]): HitKind[] {
   return kinds;
 }
 
-/** Hit kinds of range `r` against container `c`: its base-side lines, then its head-side lines. */
+/**
+ * Hit kinds of range `r` against container `c`: its lines in the indexed file, then (base side)
+ * the hunk's added lines in the head container with the same containerPath.
+ */
 function hitKinds<T extends FileSymbol>(c: T, r: BaseRange, file: FileSelectionInput<T>): HitKind[] {
   const node = file.indexed ? findContainerNode(file.indexed.root, c.start_line, c.end_line) : null;
   if (!node) return spanKinds(c, r, file.symbols);
@@ -417,8 +429,9 @@ class DiffContents {
 
 /**
  * Does the index hold `read`'s content for the diff's files? Compares ci_files.content_hash
- * (Bun.hash of the file text, as the file walker computes it) for every indexed path.
- * `verified`: at least one file compared and all match; `mismatched`: files that differ.
+ * (Bun.hash of the file text, as the file walker computes it) for every indexed path, one
+ * read after another. `verified`: at least one file compared and all match; `mismatched`:
+ * files that differ or cannot be read.
  */
 async function indexHolds(
   repoId: string,
@@ -496,7 +509,8 @@ export async function detectChanges(
   }
   for (const w of warnings) tracer?.recordWarning(w);
 
-  // Head side matches one bounding range per file but checks containers against the exact lines.
+  // Head side matches one bounding range per file but checks containers against the touched
+  // lines (a deletion-only hunk's old-side lines, read in the head tree).
   const ranges: Map<string, LineRange[]> = side === "base" ? diff.baseFiles : boundingRanges(diff.files);
   const exact: Map<string, BaseRange[]> = side === "base" ? diff.baseFiles : lineRuns(diff.files);
   tracer?.setDiff(ranges.size, diff.addedLines, diff.removedLines);

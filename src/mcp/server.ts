@@ -212,8 +212,8 @@ server.tool(
   "detect_changes",
   "Given a git diff or commit range, identify which symbols changed and what calls them. " +
     "For a PR review, index the PR's base and pass ref 'base...head': the old-side hunk lines are matched against the base's symbols, so you get the callers of what the PR changes (side 'base'). " +
-    "A class, interface, enum or object a change falls in is kept in changedSymbols only when a hit lies in its header or primary constructor, a field or stored property, an init/static block, or a member without a body (keptContainers names the kind); hits in methods, nested classes, computed properties, comments or blank lines move it to droppedContainers. If that leaves a file with no changed symbol, the innermost container stays (reason 'floor'). " +
-    "affectedSymbols carry edge_kind, resolution and changed_symbols (every changed symbol that reaches the entry); calls/overrides sort above imports. Check `warnings` for an index at the wrong commit.",
+    "A class, interface, enum or object a change falls in is kept in changedSymbols only when a hit lies in its header or primary constructor, a field or stored property, an init/static block, a Kotlin secondary constructor, an enum entry, a member without a body, or a class-body node the rule does not classify (keptContainers names the kind); when every hit lies in methods, Java constructors, nested classes, computed properties, comments or blank lines, it moves to droppedContainers. If that leaves a file with no changed symbol, the innermost container stays (reason 'floor'). " +
+    "affectedSymbols carry edge_kind, resolution and changed_symbols (every changed symbol that reaches the entry); calls/overrides sort above imports. Check `warnings` for an index at the wrong commit or with other content than the matched side.",
   {
     repo: z.string().describe("Repository name"),
     ref: z
@@ -223,7 +223,7 @@ server.tool(
     side: z
       .enum(["base", "head"])
       .optional()
-      .describe("Which side of the diff the index holds. Default: 'base' when the index's last commit is the diff's base (for a single ref, also when HEAD has moved on) and its content matches the base, else 'head'"),
+      .describe("Which side of the diff the index holds. Default: 'base' when the index's last commit is the diff's base (for a single ref, only when HEAD has moved off it), else 'head'. An automatic 'base' becomes 'head' when the indexed content of the diff's files differs from the base and matches the head; it stays 'base' when it matches neither"),
     trace: z.boolean().optional().describe("If true, attach a trace pointer URL to the response"),
   },
   async ({ repo, ref, side, trace }) =>
