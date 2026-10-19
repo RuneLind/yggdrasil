@@ -49,7 +49,7 @@ source files → Tree-sitter AST → symbol extraction → import resolution
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg → pointer-mode trace (see Tracing below) |
 | `symbol_context` | 360-degree view: callers, callees, inheritance, overrides / overridden_by |
 | `impact` | Blast radius with confidence scoring by depth. Follows dispatch through `overrides` edges: callers of an overridden method appear as `calls` with `via` naming it; impact of an interface method lists each implementation with `edge_kind = 'overrides'`. Each result carries the `edge_kind` and `resolution` of the edge that reached it and is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/config/util/builder/exception/other) via name+path heuristics. Optional `archetype_exclude` arg trims noise; `archetype_counts` on the response shows the pre-filter distribution. |
-| `detect_changes` | Git diff → affected symbols and their blast radius (inherits archetype tagging via `impact`) |
+| `detect_changes` | Git diff → changed symbols and their blast radius by symbol id (archetype, `edge_kind`, `resolution`, `changed_symbols`; calls/overrides above imports). `side: "base"` (review mode, default for a two-sided ref when `last_commit` is the diff's base, unless the diff's indexed content differs from the base and matches the head) matches old-side hunk ranges against an index of the base; `side: "head"` matches one bounding range per file over its new-side lines (old-side lines for a deletion-only hunk). The container rule (`src/search/container-rule.ts`) classifies each hit by the tree-sitter node of the class body it falls in, on the base file and, for added lines, the head file (with `side: "head"`, the head file only): header, stored field/property, init/static block, secondary constructor, enum entry, bodiless member or an unlisted node (`unknown`) keep the container (`keptContainers`); methods, Java constructors, nested classes, computed properties, comments and blank lines drop it (`droppedContainers`); a file left with no changed symbol keeps its innermost container (`floor`). Contract in README § detect_changes. |
 | `analyze_ticket` | Ticket text → top candidate symbols, each bundled with caller/callee/inheritance context + blast radius + affected tests. One round-trip orchestration over `search`/`symbol_context`/`impact` (inherits archetype tagging). |
 | `file_outline` | All symbols in a file with hierarchy |
 | `read_source` | Read source code of an indexed file with line numbers |
@@ -68,7 +68,7 @@ Per-tool trace coverage:
 | `search` | yes | `TraceSearchV1` | Hybrid retrieval pipeline (FTS + semantic + name → RRF → final) |
 | `impact` | yes | `TraceImpactV1` | BFS hop counts, confidence buckets, top results |
 | `search_pattern` | yes | `TracePatternV1` | rg invocation, per-repo match counts, pre-trim totals |
-| `detect_changes` | yes | `TraceDetectChangesV1` | Diff stats, per-file symbol extraction, blast radius per changed symbol |
+| `detect_changes` | yes | `TraceDetectChangesV1` | Side and resolved base/head, warnings, diff stats, per-file symbol extraction, dropped containers, blast radius per changed symbol, affected count per edge kind |
 | `analyze_ticket` | no (v1) | — | Composes already-traced primitives; pass `trace: true` to `search` / `impact` directly if needed. A typed `TraceAnalyzeTicketV1` variant can be added later. |
 | `symbol_context`, `read_source`, `file_outline`, `list_files`, `list_repos` | no | — | Single-step deterministic queries; nothing to surface |
 
@@ -144,7 +144,8 @@ src/
 │   ├── archetype.ts         — name+path heuristics for arketype-tagging impact results
 │   ├── analyze-ticket.ts    — ticket → candidate symbols + context bundle
 │   ├── symbol-context.ts    — edge buckets for symbol_context / analyze_ticket
-│   └── detect-changes.ts    — git diff → affected symbols
+│   ├── detect-changes.ts    — git diff → affected symbols
+│   └── container-rule.ts    — tree-sitter node kinds for detect_changes' container rule
 ├── db/
 │   ├── connection.ts        — postgres connection
 │   ├── repos.ts             — ci_repos CRUD

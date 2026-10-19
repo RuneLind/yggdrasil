@@ -218,13 +218,57 @@ The server exposes 10 tools over streamable HTTP on port 9130:
 | `search` | Hybrid search (FTS + semantic + name match via RRF). Optional `trace` arg attaches a trace pointer URL — see [Tracing](#tracing). | "Find code related to payment processing" |
 | `symbol_context` | 360-degree view of a symbol: callers, callees, inheritance, and for a method the ancestor methods it overrides (`overrides`) and its implementations (`overridden_by`) | "What calls this method? What does it extend?" |
 | `impact` | Blast radius — what breaks if this symbol changes? Each result is tagged with an `archetype` (controller/service/mapper/dto/entity/repository/test/…) so an agent can filter the noise with `archetype_exclude`, and carries the `edge_kind` and `resolution` (`local`/`static`/`typed`/`chain`/`super`, `null` for other kinds) of the edge that reached it. Dispatch: `impact(FooImpl.bar)` also lists the callers of every `Foo.bar` it overrides, as `calls` with `via` naming `Foo.bar`; `impact(Foo.bar)` lists each implementation once with `edge_kind` `overrides`, then its callers. A dispatched call is kept only when the method's class (or a subclass of it) can be the call's receiver type, `super` calls never dispatch, and the changed symbol never lists itself. Optional `trace` arg. | "If I change Behandling, what's affected? (excluding tests and controllers)" |
-| `detect_changes` | Map a git diff to affected symbols + their blast radius (inherits archetype tagging). Optional `trace` arg. | "What's the impact of this PR?" |
+| `detect_changes` | Map a git diff to changed symbols and the callers of each (archetype, `edge_kind` and `resolution` per entry; calls/overrides sort above imports). See [detect_changes](#detect_changes). Optional `trace` arg. | "Who calls what this PR changes?" |
 | `analyze_ticket` | One round-trip orchestration over `search` → `symbol_context` → `impact` per top candidate. Returns ticket → top symbols + caller/callee/inheritance + blast radius (archetype-tagged) + affected tests. `callers` holds the direct callers, then the callers that reach the symbol by dispatch, with `via`. | "Analyze this Jira ticket and tell me what to touch" |
 | `file_outline` | All symbols in a file with hierarchy and signatures | "Show me the structure of this file" |
 | `read_source` | Read source code of an indexed file with line numbers | "Show me lines 30-60 of BehandlingService.java" |
 | `list_repos` | List all indexed repositories with metadata | "What repos are indexed?" |
 | `search_pattern` | Text/regex search across indexed source files (delegates to ripgrep). Optional `trace` arg. | "Find all uses of `BigDecimal.ZERO`" |
 | `list_files` | List files in an indexed repo, filterable by directory and glob | "What `.kt` files live under `service/`?" |
+
+### detect_changes
+
+For a PR review, index the PR's base and pass `ref: "<base>...<head>"`. The callers of what a PR changes live on the base, and a method the PR adds has no callers yet.
+
+| `ref` | Base | Head |
+|---|---|---|
+| none | `HEAD` (the empty tree in a repo without commits) | working tree, staged and unstaged |
+| `a` or `:/text` | `a` | working tree |
+| `a..b` | `a` | `b` |
+| `a...b` | `git merge-base a b` | `b` |
+| `X^!` | `X^` | `X` |
+| `X^-n` | `X^n` (`n` defaults to 1) | `X` |
+
+An omitted side of a range is `HEAD`. A ref that git cannot resolve returns an error, and so does a flag-style ref such as `--cached` or `-R`. Renames are always detected, whatever `diff.renames` says.
+
+`side` selects which hunk lines are matched against the index:
+
+- `base` (review mode): old-side ranges, keyed on the `---` path. Renames resolve on the old path; added files have no base symbols. An insertion-only hunk (`@@ -N,0 …`) flags a symbol only when it contains both line N and line N+1, so code inserted inside a method body flags that method, and code inserted between two methods flags neither. The exception is lines inserted directly above a symbol that the head file shows as part of its declaration (annotations, modifiers): they flag that symbol. This exception needs a parsed head file, so it applies to Java and Kotlin only.
+- `head`: new-side lines, keyed on the `+++` path. A deletion-only hunk contributes its old-side line numbers instead. Symbols are selected by one bounding range per file, from its first to its last touched line, so a symbol between two hunks is flagged too.
+
+When you omit `side`, it is `base` for a two-sided ref (`a..b`, `a...b`, `X^!`, `X^-n`) when `ci_repos.last_commit` equals the resolved base, otherwise `head`. A single ref `a` diffs `a` against the working tree: it is `base` when `last_commit` equals `a` and the checked-out `HEAD` differs from `last_commit` (the index was built at `a` before a checkout), otherwise `head`, since the index may hold working-tree edits. No ref is always `head`. The commit can match while the content does not, for example an index built on a dirty tree at `a` whose edits were committed afterwards, so the content hashes in `ci_files` of the diff's files are compared with the base blobs and the head content: when any differs from the base and all of them match the head, the automatic `base` becomes `head`; when the content matches neither side, `base` stays. An automatic `head` never becomes `base`. `warnings` reports an index whose commit differs from the side being matched (for a working-tree head, a `last_commit` other than the checked-out `HEAD`), or one at the base commit whose content differs from the base. When the index holds the matched side's content for every changed file it indexes (at least one), no warning is given. The content check runs on every call, also with an explicit `side`: one query per side, then one read per indexed changed file per side, one after another (`git cat-file --filters` for a commit, the file itself for a working-tree head).
+
+The container rule decides whether a class, interface, enum or object a change falls in stays in `changedSymbols` or moves to `droppedContainers`. Each hit inside a container (with `side: "base"`: a changed or deleted base line, an insertion point, and the inserted or replacing lines read from the head file; with `side: "head"`: a touched line in the head file) is classified by the tree-sitter node of the class body it falls in, and `keptContainers` names the kind that kept each container:
+
+| Hit in | Kind | Keeps the container |
+|---|---|---|
+| The header: annotations, modifiers, name, type parameters, supertypes, the primary constructor, the `{` line | `header` | yes |
+| A stored property (initializer or delegate, or no accessor), a Java field or interface constant, its initializer and annotations; an `init`, `static` or instance initializer block; a Kotlin secondary constructor; an enum entry | `state` | yes |
+| A function or method without a body (abstract or interface member) | `contract` | yes |
+| A named class-body node the rule does not list: a Kotlin `type_alias`, a Java record's compact constructor, a nested Java annotation type, a parse error that tree-sitter leaves as a class-body `ERROR` node | `unknown` | yes |
+| Without a node to classify: in a file it cannot parse (not Java or Kotlin, or the content is unreadable), or when the parsed file has no container node at the indexed lines (the index holds other content than the file read), any line that no indexed child other than a field or property covers; an insertion point that falls in no such child. Head-file lines are then not read. | `unknown` | yes |
+| A method or function with a body (a block or `= expression`), a Java constructor (not a record's compact constructor), a nested class, interface, enum, record or object, a computed property (accessor, no initializer); without a node to classify, a line inside an indexed child other than a field or property | `member` | no |
+| A comment; a line that no named node covers: a blank line, the closing `}`, a lone `;` | `comment`, `blank` | no |
+
+A parse error that is not a class-body `ERROR` node changes the tree instead: its text can end up inside a neighbouring node, which then classifies it, or the container node no longer spans the indexed lines, which falls back to the row "Without a node to classify".
+
+On the base side, an insertion inside a node counts as an edit of that node. An insertion between members is classified by the lines it adds, read in the head file's container with the same name path (`Outer.Inner`), so an inserted field keeps the container, and an inserted method, computed property, nested class or comment does not. The lookup takes the first container with that path, so it misses after a rename of the container or an enclosing one, and takes the first of two containers that share a path (two local classes of one name). Lines inserted directly above a symbol that the head file shows as part of its declaration (annotations, modifiers) count as a hit on the symbol's first line. A companion object is read as part of its class: its `companion object {` line counts as `header`, its members as the class's members.
+
+Floor: when every symbol a file's hits overlap is a dropped container, the innermost container of each hit stays, with `reason: "floor"`. A change the rule attributes to no member, such as a comment edit or an inserted method, does not erase the file's blast radius. A KDoc outside every symbol (above the class) hits nothing.
+
+With `side: "head"`, the rule classifies each file's touched lines in the head file. Known limitation: a deletion-only hunk contributes its old-side line numbers, which the rule reads in the head file, so a deletion can classify, and flag, a symbol that sits at those line numbers in the head file. A `val` or field declared inside a method, function or constructor is not reported as a changed symbol.
+
+Each changed symbol's blast radius is computed by id, so overloads do not share callers. An affected symbol reached from several changed symbols appears once: it keeps the best edge by a total order (any edge kind above imports, then confidence; calls, overrides, extends, implements; depth; resolution; a direct edge before one `via` an ancestor; qualified name; id), so the result does not depend on the order of the changed symbols, and `changed_symbols` lists every changed symbol that reaches it.
 
 ### Search algorithm
 
@@ -270,7 +314,7 @@ The orchestrator parses the URL, fetches `GET /api/trace/<id>`, and pins the JSO
 | `search` | yes | Hybrid retrieval pipeline — FTS / semantic / name → RRF → final |
 | `impact` | yes | BFS hop counts, confidence buckets, top results |
 | `search_pattern` | yes | rg invocation, per-repo match counts, pre-trim totals |
-| `detect_changes` | yes | Diff stats, per-file symbol extraction, blast radius per changed symbol |
+| `detect_changes` | yes | Side and resolved base/head, warnings, diff stats, per-file symbol extraction, dropped containers, blast radius per changed symbol, affected count per edge kind |
 | `symbol_context`, `read_source`, `file_outline`, `list_files`, `list_repos` | no | Single-step deterministic queries; nothing meaningful to surface |
 
 ### Enabling traces
