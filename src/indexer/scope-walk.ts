@@ -612,7 +612,10 @@ function kotlinClassParameters(owner: SyntaxNode | null): SyntaxNode[] {
   return ctor ? named(findNamedChild(ctor, "class_parameters") ?? ctor).filter((p) => p.type === "class_parameter") : [];
 }
 
-/** `owner` is the body's declaration: its parent, or the class whose misparsed body it is. */
+/**
+ * `owner` is the body's declaration: its parent, or the class whose misparsed body it is;
+ * null for a misparsed companion.
+ */
 function kotlinClassFrame(body: SyntaxNode, source: string, owner: SyntaxNode | null = body.parent): { frame: Frame; ctorParams: Map<string, Decl> } {
   const names = new Map<string, Decl>();
   for (const m of named(body)) if (m.type === "property_declaration") addKotlinProperty(m, names, source);
@@ -888,6 +891,8 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
       return visitIn({ names }, node);
     }
     // The call carrying a misparsed lambda (`d { … }`, `init { … }`, `Name { … }`) is no call.
+    // Only lambdas directly in a misparsed body count: `init { … }` in a misparsed companion
+    // is still recorded.
     if (node.type === "call_expression" && misparsedMember(node) === undefined) recordKotlinCall(node);
     for (const c of all(node)) visit(c);
   };

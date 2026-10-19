@@ -6,7 +6,7 @@ import { sql } from "../src/db/connection.ts";
 /**
  * Delegating Kotlin classes whose body the grammar reads as a trailing lambda on the
  * delegate (see misparsedKotlinLambdas), through the real indexer. Every class here is its
- * file's last declaration or has a delegate ending in a call, so each body is misparsed.
+ * file's last declaration, so each body is misparsed.
  *
  * Run with: `YGGDRASIL_INTEGRATION_TESTS=1 bun test tests/delegation-body.integration.test.ts`
  */

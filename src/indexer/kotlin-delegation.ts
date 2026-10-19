@@ -4,13 +4,18 @@ import { nodeText, walkTree } from "./ast-utils.ts";
 /**
  * tree-sitter-kotlin can read the body of a delegating class (`class X(d: I) : I by d { … }`)
  * as a trailing lambda on the delegate expression; kotlinc always reads a `{` after a
- * by-clause as the class body. Whether it happens depends on the body's content and
- * layout, not only on the class's position: seen for the last declaration of a file, a
- * one-line body or companion nested anywhere, and a delegate ending in a call
- * (`by d ?: Impl() { … }`) in any position. So the body is found by shape, not position.
+ * by-clause as the class body. Whether it happens depends on the delegate and the body's
+ * layout, not only on the class's position: seen for the last declaration of a file, and
+ * in every position tried for a one-line body (class or delegating companion) and for a
+ * compound delegate (binary such as `?:`, infix, `if`, range or annotated: `by d ?: e { … }`).
+ * A plain name or call (`by d`, `by make()`, `by a.b()`) with a multi-line body followed
+ * by another declaration parses as class_body. So the body is found by shape, not position.
  */
 
-/** Nodes whose rightmost operand is an expression, so a trailing lambda on it ends them. */
+/**
+ * Nodes whose rightmost operand is an expression, so a trailing lambda on it ends them.
+ * `in_expression` and `labeled_expression` are missing: a known gap (`by a in b { … }`).
+ */
 const SPINE: ReadonlySet<string> = new Set([
   "binary_expression", "if_expression", "infix_expression", "range_expression", "annotated_expression", "throw_expression",
 ]);
@@ -29,8 +34,9 @@ const DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "object_
  */
 export function misparsedKotlinClassBody(decl: SyntaxNode): SyntaxNode | null {
   if (!DECLARATIONS.has(decl.type)) return null;
-  // explicit_delegation sits only in delegation_specifiers > delegation_specifier, so this
-  // also finds that the declaration ends in its delegation specifiers: it has no class body.
+  // The declaration check is needed: under ERROR recovery the same chain sits under an
+  // ERROR node (`val q = object : Base(), I by d { … }`). In a declaration, the chain also
+  // shows that it ends in its delegation specifiers: it has no class body.
   const specs = lastNamed(decl);
   const spec = specs ? lastNamed(specs) : null;
   const delegation = spec ? lastNamed(spec) : null;
@@ -40,7 +46,10 @@ export function misparsedKotlinClassBody(decl: SyntaxNode): SyntaxNode | null {
   return expr ? trailingLambda(expr) : null;
 }
 
-/** `f { … }` → its lambda_literal: annotated_lambda sits only in a call and ends in its lambda. */
+/**
+ * `f { … }` → its lambda_literal: annotated_lambda sits only in a call and ends in its lambda.
+ * The type check is needed: a call's last child can be its value_arguments.
+ */
 function trailingLambda(call: SyntaxNode): SyntaxNode | null {
   const trailing = lastNamed(call);
   return trailing?.type === "annotated_lambda" ? lastNamed(trailing) : null;

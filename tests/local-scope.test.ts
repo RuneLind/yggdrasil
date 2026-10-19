@@ -105,7 +105,7 @@ const ROWS: { name: string; src: string; decl: string; body: string; symbols: st
     symbols: ["X member - -", "foo member - X"],
   },
   {
-    name: "by d ?: Impl(), followed (a call before the body misparses it anyway)",
+    name: "by d ?: Impl(), followed (a compound delegate misparses it anyway)",
     decl: "X",
     src: `class X(d: I?) : I by d ?: Impl() {\n    override fun foo(): String = ""\n}${OUTER_TAIL}`,
     body: "lambda",
