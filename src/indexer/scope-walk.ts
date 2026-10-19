@@ -2,6 +2,7 @@ import type { Node as SyntaxNode } from "web-tree-sitter";
 import { nodeText, findNamedChild } from "./ast-utils.ts";
 import { normalizeTypeName, kotlinVariableType, kotlinIntegerLiteralType } from "./symbol-extractor.ts";
 import { canonicalType } from "./overloads.ts";
+import { misparsedKotlinLambdas } from "./kotlin-delegation.ts";
 
 /**
  * One pass over a file's AST that keeps a stack of scopes and records every call with the
@@ -606,24 +607,24 @@ function addKotlinVariable(d: SyntaxNode, names: Map<string, Decl>, source: stri
   }
 }
 
-function kotlinClassParameters(body: SyntaxNode): SyntaxNode[] {
-  const ctor = body.parent?.type === "class_declaration" ? findNamedChild(body.parent, "primary_constructor") : null;
+function kotlinClassParameters(owner: SyntaxNode | null): SyntaxNode[] {
+  const ctor = owner?.type === "class_declaration" ? findNamedChild(owner, "primary_constructor") : null;
   return ctor ? named(findNamedChild(ctor, "class_parameters") ?? ctor).filter((p) => p.type === "class_parameter") : [];
 }
 
-function kotlinClassFrame(body: SyntaxNode, source: string): { frame: Frame; ctorParams: Map<string, Decl> } {
+/** `owner` is the body's declaration: its parent, or the class whose misparsed body it is. */
+function kotlinClassFrame(body: SyntaxNode, source: string, owner: SyntaxNode | null = body.parent): { frame: Frame; ctorParams: Map<string, Decl> } {
   const names = new Map<string, Decl>();
   for (const m of named(body)) if (m.type === "property_declaration") addKotlinProperty(m, names, source);
   // Constructor properties (`val`/`var`) are members; every constructor parameter is in
   // scope in property initializers and init blocks, where it shadows a member.
   const ctorParams = new Map<string, Decl>();
-  for (const p of kotlinClassParameters(body)) {
+  for (const p of kotlinClassParameters(owner)) {
     const name = nodeText(findNamedChild(p, "identifier") ?? p, source);
     const type = kotlinVariableType(p, null, source);
     ctorParams.set(name, type);
     if (all(p).some((c) => c.type === "val" || c.type === "var")) names.set(name, type);
   }
-  const owner = body.parent;
   const nameNode = owner && (owner.type === "class_declaration" || owner.type === "object_declaration")
     ? owner.childForFieldName("name") ?? findNamedChild(owner, "identifier")
     : null;
@@ -817,32 +818,48 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
     scope.pop();
   };
 
-  const visit = (node: SyntaxNode): void => {
-    if (KOTLIN_CLASS_BODIES.has(node.type)) {
-      const { frame, ctorParams } = kotlinClassFrame(node, source);
-      scope.push(frame);
-      // Plain constructor parameters are in scope in property initializers and init
-      // blocks, not in a property's getter or setter.
-      for (const c of all(node)) {
-        if (ctorParams.size === 0 || (c.type !== "property_declaration" && c.type !== "anonymous_initializer")) visit(c);
-        else if (c.type === "anonymous_initializer") visitIn({ names: ctorParams }, c);
-        else {
-          for (const p of all(c)) {
-            if (p.type === "getter" || p.type === "setter") visit(p);
-            else {
-              scope.push({ names: ctorParams });
-              visit(p);
-              scope.pop();
-            }
+  const visitClassBody = (body: SyntaxNode, owner: SyntaxNode | null) => {
+    const { frame, ctorParams } = kotlinClassFrame(body, source, owner);
+    scope.push(frame);
+    // Plain constructor parameters are in scope in property initializers and init
+    // blocks, not in a property's getter or setter.
+    for (const c of all(body)) {
+      const init = c.type === "anonymous_initializer" || misparsedMember(c) === "init";
+      if (ctorParams.size === 0 || (c.type !== "property_declaration" && !init)) visit(c);
+      else if (init) visitIn({ names: ctorParams }, c);
+      else {
+        for (const p of all(c)) {
+          if (p.type === "getter" || p.type === "setter") visit(p);
+          else {
+            scope.push({ names: ctorParams });
+            visit(p);
+            scope.pop();
           }
         }
       }
-      scope.pop();
-      return;
     }
+    scope.pop();
+  };
+
+  /** The kind of the misparsed lambda `call` carries (see misparsedKotlinLambdas). */
+  const misparsedMember = (call: SyntaxNode) => {
+    const trailing = call.namedChild(call.namedChildCount - 1);
+    const lambda = trailing?.type === "annotated_lambda" ? trailing.namedChild(trailing.namedChildCount - 1) : null;
+    return lambda ? misparsed.get(lambda.id)?.kind : undefined;
+  };
+
+  const visit = (node: SyntaxNode): void => {
+    if (KOTLIN_CLASS_BODIES.has(node.type)) return visitClassBody(node, node.parent);
     if (KOTLIN_PARAMETER_OWNERS.has(node.type)) return visitIn(kotlinParamFrame(node, source), node);
     if (KOTLIN_BLOCKS.has(node.type)) return visitIn({ names: new Map() }, node, true);
-    if (node.type === "lambda_literal") return visitIn(kotlinLambdaFrame(node, scope, source), node, true);
+    if (node.type === "lambda_literal") {
+      // A class body, companion or init block the grammar misparsed as a lambda.
+      const m = misparsed.get(node.id);
+      if (m?.kind === "body") return visitClassBody(node, m.decl);
+      if (m?.kind === "companion") return visitClassBody(node, null);
+      if (m?.kind === "init") return visitIn({ names: new Map() }, node, true);
+      return visitIn(kotlinLambdaFrame(node, scope, source), node, true);
+    }
     if (node.type === "for_statement") {
       const names = new Map<string, Decl>();
       for (const d of named(node)) if (d.type === "variable_declaration" || d.type === "multi_variable_declaration") addKotlinVariable(d, names, source);
@@ -870,7 +887,8 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
       if (id) names.set(nodeText(id, source), normalizeTypeName(nodeText(findNamedChild(node, "user_type") ?? id, source)));
       return visitIn({ names }, node);
     }
-    if (node.type === "call_expression") recordKotlinCall(node);
+    // The call carrying a misparsed lambda (`d { … }`, `init { … }`, `Name { … }`) is no call.
+    if (node.type === "call_expression" && misparsedMember(node) === undefined) recordKotlinCall(node);
     for (const c of all(node)) visit(c);
   };
 
@@ -920,6 +938,7 @@ export function extractKotlinCalls(root: SyntaxNode, source: string, calls: Extr
   };
 
   const links = new StepLinks();
+  const misparsed = misparsedKotlinLambdas(root, source);
   // Top-level properties are in scope wherever they are declared in the file.
   const top = new Map<string, Decl>();
   for (const c of named(root)) if (c.type === "property_declaration") addKotlinProperty(c, top, source);

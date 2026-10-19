@@ -351,3 +351,68 @@ describe("Kotlin implicit receivers across class boundaries", () => {
     expect((await call("kotlin", src, "baz")).implicitReceiverType).toBeNull();
   });
 });
+
+/**
+ * A delegating class whose body the grammar reads as a trailing lambda on the delegate
+ * (see misparsedKotlinLambdas) walks like a class body: constructor parameters, members,
+ * companion members and `with(x)` receivers keep their types, and the calls that carry
+ * the misparsed lambdas (`d { … }`, `init { … }`, `Factory { … }`) are not recorded.
+ */
+describe("Kotlin misparsed delegating class bodies", () => {
+  const body = (indent: string) => [
+    `{`,
+    `    val q = plain.count(3)`,
+    `    init {`,
+    `        plain.save(4)`,
+    `    }`,
+    `    override fun foo(): Int {`,
+    `        r.find(1)`,
+    `        d.bar()`,
+    `        with(r) { find(2) }`,
+    `        return 1`,
+    `    }`,
+    `    companion object Factory {`,
+    `        private val repo: Repo = Repo()`,
+    `        fun make() = repo.load(5)`,
+    `    }`,
+    `}`,
+  ].map((l, i) => (i === 0 ? l : indent + l)).join("\n");
+  const params = "private val r: Repo, private val d: I, plain: Repo";
+  const EXPECTED = [
+    "count Repo -", "save Repo -", "find Repo -", "bar I -", "with - -", "find - Repo", "Repo - -", "load Repo -",
+  ];
+  const ROWS: { name: string; src: string; extra?: string[] }[] = [
+    { name: "by d, last in file", src: `class X(${params}) : I by d ${body("")}\n` },
+    { name: "by d ?: Impl(), followed by a class", src: `class X(${params}) : I by d ?: Impl() ${body("")}\n\nclass Y\n`, extra: ["Impl - -"] },
+    { name: "by if (c) d else d, last", src: `class X(c: Boolean, ${params}) : I by if (c) d else d ${body("")}\n` },
+    { name: "two delegations, last", src: `class X(${params}, e: J) : I by d, J by e ${body("")}\n` },
+    { name: "Base(), I by d, last", src: `class X(${params}) : Base(), I by d ${body("")}\n` },
+    { name: "generic I<T> by d, last", src: `class X<T>(${params}) : I<T> by d ${body("")}\n` },
+  ];
+  const describeCall = (c: ExtractedCall) => `${c.methodName} ${c.receiverType ?? "-"} ${c.implicitReceiverType ?? "-"}`;
+
+  for (const row of ROWS) {
+    test(row.name, async () => {
+      const { calls } = await extract("kotlin", `package p\n\n${row.src}`);
+      const expected = [...(row.extra ?? []), ...EXPECTED];
+      expect(calls.map(describeCall).sort()).toEqual(expected.sort());
+      for (const c of calls.filter((c) => c.receiverType !== null)) expect(c.receiverDeclared).toBe(true);
+    });
+  }
+
+  test("a companion property is in scope before its declaration, as in a class body", async () => {
+    const src = `package p\n\nclass X(d: I) : I by d {\n    companion object {\n        fun make() = repo.load(5)\n        private val repo: Repo = Repo()\n    }\n}\n`;
+    expect((await call("kotlin", src, "load")).receiverType).toBe("Repo");
+  });
+
+  test("an init block sees a constructor parameter named it, not a lambda's it", async () => {
+    const src = `package p\n\nclass X(it: Repo, d: I) : I by d {\n    init {\n        it.save(4)\n    }\n}\n`;
+    expect((await call("kotlin", src, "save")).receiverType).toBe("Repo");
+  });
+
+  test("a nested delegating class with a one-line companion, last member of its outer class", async () => {
+    const src = `package p\n\nclass Outer {\n    class X(private val r: Repo, d: I) : I by d {\n        override fun foo() = r.find(1)\n        companion object { private val repo: Repo = Repo(); fun make() = repo.load(5) }\n    }\n}\n`;
+    const { calls } = await extract("kotlin", src);
+    expect(calls.map(describeCall).sort()).toEqual(["Repo - -", "find Repo -", "load Repo -"]);
+  });
+});

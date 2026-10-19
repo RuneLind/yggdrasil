@@ -133,6 +133,7 @@ src/
 │   ├── symbol-extractor.ts  — extract symbols from AST per language
 │   ├── import-resolver.ts   — resolve imports to symbol references
 │   ├── call-graph.ts        — per-language dispatch; inheritance clauses
+│   ├── kotlin-delegation.ts — finds delegating class bodies the Kotlin grammar misparses as lambdas
 │   ├── scope-walk.ts        — one-pass scope walk: call sites with receiver/argument types
 │   ├── overloads.ts         — argument-type narrowing among overloads
 │   ├── edge-resolver.ts     — store call sites; rebuild calls + inheritance edges repo-wide

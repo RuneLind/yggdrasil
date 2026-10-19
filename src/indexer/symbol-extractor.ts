@@ -3,6 +3,7 @@ import type { SupportedLanguage } from "./parser.ts";
 import type { SymbolInsert } from "../db/symbols.ts";
 import { nodeText, findNamedChild } from "./ast-utils.ts";
 import { canonicalType } from "./overloads.ts";
+import { misparsedKotlinLambdas, type MisparsedLambda } from "./kotlin-delegation.ts";
 import type { Node as SyntaxNode } from "web-tree-sitter";
 
 export type SymbolKind = "class" | "interface" | "enum" | "method" | "function" |
@@ -209,9 +210,10 @@ export function extractSymbols(
     }
   }
 
+  const misparsed = lang === "kotlin" ? misparsedKotlinLambdas(tree!.rootNode, source) : new Map<number, MisparsedLambda>();
   for (let i = 0; i < symbols.length; i++) {
     const parent = symbols[i].parentIndex === null ? null : symbols[symbols[i].parentIndex!];
-    const scope = enclosingScope(nodes[i], parent);
+    const scope = enclosingScope(nodes[i], parent, misparsed);
     symbols[i].isLocal = scope.local;
     if (scope.companion) symbols[i].isStatic = true;
   }
@@ -232,28 +234,24 @@ const LOCAL_SCOPES: ReadonlySet<string> = new Set([
 /**
  * Whether anything between `node` and its parent container's node (or the root) makes the
  * declaration local (see LOCAL_SCOPES), and whether it sits in a Kotlin companion object.
- * A Java class body's instance initializer is a `block`.
+ * A Java class body's instance initializer is a `block`. A Kotlin class body or companion
+ * the grammar misparsed as a lambda (see misparsedKotlinLambdas) is not a local scope.
  */
-function enclosingScope(node: SyntaxNode, parent: ExtractedSymbol | null): { local: boolean; companion: boolean } {
+function enclosingScope(
+  node: SyntaxNode,
+  parent: ExtractedSymbol | null,
+  misparsed: Map<number, MisparsedLambda>,
+): { local: boolean; companion: boolean } {
   let local = false;
   let companion = false;
   for (let n = node.parent; n; n = n.parent) {
     if (parent && n.startIndex === parent.startIndex && n.endIndex === parent.endIndex) break;
-    if (LOCAL_SCOPES.has(n.type) && !isDelegatedClassBody(n)) local = true;
+    const kind = misparsed.get(n.id)?.kind;
+    if (kind === "companion") companion = true;
+    else if (LOCAL_SCOPES.has(n.type) && kind !== "body") local = true;
     if (n.type === "companion_object") companion = true;
   }
   return { local, companion };
-}
-
-/**
- * tree-sitter-kotlin parses the body of `class X(d: I) : I by d { … }` as a trailing
- * lambda on the delegate (`explicit_delegation > call_expression > annotated_lambda >
- * lambda_literal`) when the class is the last declaration in its file. That lambda is
- * the class body; a lambda nested in the delegate (`I by make { … } { … }`) is not.
- */
-function isDelegatedClassBody(n: SyntaxNode): boolean {
-  // A LOCAL_SCOPES node three levels below explicit_delegation is only that lambda.
-  return n.parent?.parent?.parent?.type === "explicit_delegation";
 }
 
 /** `import a.b.C`, `import a.b.*`, `import a.b.C as D`, read from the AST. */
