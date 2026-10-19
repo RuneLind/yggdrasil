@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseGitDiff } from "../src/search/diff-parse.ts";
+import { parseGitDiff, rangeHits } from "../src/search/diff-parse.ts";
 
 /**
  * Table-driven over real `git diff --unified=0 --no-color` output shapes.
@@ -208,5 +208,186 @@ index 1234567..89abcde 100644
 
   test("empty diff → no files", () => {
     expect(filesObject("")).toEqual({});
+  });
+});
+
+/** Base side: old-side ranges keyed on the `---` path, for an index of the diff's base. */
+function baseObject(diff: string): Record<string, [number, number][]> {
+  const { baseFiles } = parseGitDiff(diff);
+  const out: Record<string, [number, number][]> = {};
+  for (const [path, ranges] of baseFiles) out[path] = ranges.map((r) => [r.start, r.end]);
+  return out;
+}
+
+describe("parseGitDiff base side", () => {
+  test("edit hunk → old-side range", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -7,2 +7,3 @@
+-a
+-b
++x
++y
++z`;
+    expect(baseObject(diff)).toEqual({ "src/A.kt": [[7, 8]] });
+  });
+
+  test("insertion-only hunk → empty range between old lines N and N+1", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -5,0 +6,2 @@
++x
++y`;
+    expect(baseObject(diff)).toEqual({ "src/A.kt": [[6, 5]] });
+  });
+
+  test("insertion at the top of a file (N=0) → empty range before line 1", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -0,0 +1 @@
++import x.Y`;
+    expect(baseObject(diff)).toEqual({ "src/A.kt": [[1, 0]] });
+  });
+
+  test("deletion-only hunk → old-side range", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -10,3 +9,0 @@
+-a
+-b
+-c`;
+    expect(baseObject(diff)).toEqual({ "src/A.kt": [[10, 12]] });
+  });
+
+  test("one range per hunk, not a bounding box", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -3 +3 @@
+-a
++b
+@@ -90 +90 @@
+-c
++d`;
+    expect(baseObject(diff)).toEqual({ "src/A.kt": [[3, 3], [90, 90]] });
+  });
+
+  test("rename → keyed on the old path", () => {
+    const diff = `diff --git a/src/Old.java b/src/New.java
+similarity index 90%
+rename from src/Old.java
+rename to src/New.java
+--- a/src/Old.java
++++ b/src/New.java
+@@ -7 +7 @@
+-    void old() {}
++    void renamed() {}`;
+    expect(baseObject(diff)).toEqual({ "src/Old.java": [[7, 7]] });
+  });
+
+  test("new file (--- /dev/null) → absent: the base has no symbols for it", () => {
+    const diff = `diff --git a/src/Added.java b/src/Added.java
+new file mode 100644
+--- /dev/null
++++ b/src/Added.java
+@@ -0,0 +1,2 @@
++class Added {}
++// end
+diff --git a/src/Keep.java b/src/Keep.java
+--- a/src/Keep.java
++++ b/src/Keep.java
+@@ -2 +2 @@
+-a
++b`;
+    expect(baseObject(diff)).toEqual({ "src/Keep.java": [[2, 2]] });
+  });
+
+  test("each hunk carries its new-side span; a deletion-only hunk carries none", () => {
+    const diff = `diff --git a/src/A.kt b/src/A.kt
+--- a/src/A.kt
++++ b/src/A.kt
+@@ -3 +3 @@
+-a
++b
+@@ -49,0 +50,2 @@
++    @Deprecated("x")
++    @Suppress("y")
+@@ -60,2 +61,0 @@
+-x
+-y
+\\ No newline at end of file`;
+    expect(parseGitDiff(diff).baseFiles.get("src/A.kt")).toEqual([
+      { start: 3, end: 3, headLines: { start: 3, end: 3 } },
+      { start: 50, end: 49, headLines: { start: 50, end: 51 } },
+      { start: 60, end: 61 },
+    ]);
+  });
+
+  test("headPaths maps each base path to its head path: a rename's new path, null for a deleted file", () => {
+    const diff = `diff --git a/src/Old.java b/src/New.java
+rename from src/Old.java
+rename to src/New.java
+--- a/src/Old.java
++++ b/src/New.java
+@@ -7 +7 @@
+-a
++b
+diff --git a/src/Gone.java b/src/Gone.java
+deleted file mode 100644
+--- a/src/Gone.java
++++ /dev/null
+@@ -1 +0,0 @@
+-x
+diff --git a/src/Added.java b/src/Added.java
+--- /dev/null
++++ b/src/Added.java
+@@ -0,0 +1 @@
++y`;
+    expect(Object.fromEntries(parseGitDiff(diff).headPaths)).toEqual({ "src/Old.java": "src/New.java", "src/Gone.java": null });
+  });
+
+  test("deleted file (+++ /dev/null) → old path, old-side range", () => {
+    const diff = `diff --git a/src/Gone.java b/src/Gone.java
+deleted file mode 100644
+--- a/src/Gone.java
++++ /dev/null
+@@ -1,4 +0,0 @@
+-package x;
+-class Gone {
+-  void a() {}
+-}`;
+    expect(baseObject(diff)).toEqual({ "src/Gone.java": [[1, 4]] });
+  });
+});
+
+describe("rangeHits", () => {
+  // A symbol spanning lines 10..20 (e.g. a method body).
+  const sym = { start_line: 10, end_line: 20 };
+
+  test("insertion inside the symbol flags it", () => {
+    expect(rangeHits({ start: 15, end: 14 }, sym)).toBe(true);
+  });
+
+  test("insertion right after its last line does not flag it", () => {
+    // Between lines 20 and 21: the symbol's closing line is untouched.
+    expect(rangeHits({ start: 21, end: 20 }, sym)).toBe(false);
+  });
+
+  test("insertion right before its first line does not flag it", () => {
+    expect(rangeHits({ start: 10, end: 9 }, sym)).toBe(false);
+  });
+
+  test("insertion at the top of the file (N=0) flags nothing", () => {
+    expect(rangeHits({ start: 1, end: 0 }, { start_line: 1, end_line: 30 })).toBe(false);
+  });
+
+  test("a non-empty range touching the symbol's first or last line flags it", () => {
+    expect(rangeHits({ start: 5, end: 10 }, sym)).toBe(true);
+    expect(rangeHits({ start: 20, end: 25 }, sym)).toBe(true);
+    expect(rangeHits({ start: 21, end: 25 }, sym)).toBe(false);
   });
 });
