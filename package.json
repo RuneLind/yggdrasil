@@ -1,7 +1,7 @@
 {
   "name": "yggdrasil",
   "version": "0.1.0",
-  "description": "Code intelligence engine \u2014 indexes codebases into a searchable knowledge graph with symbol extraction, call graph traversal, and blast radius analysis. Exposes tools via MCP.",
+  "description": "Code intelligence engine — indexes codebases into a searchable knowledge graph with symbol extraction, call graph traversal, and blast radius analysis. Exposes tools via MCP.",
   "type": "module",
   "scripts": {
     "start": "bun run src/mcp/server.ts",
