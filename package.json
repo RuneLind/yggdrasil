@@ -16,9 +16,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@modelcontextprotocol/sdk": "^1.11.0",
-    "postgres": "^3.4.5",
-    "web-tree-sitter": "^0.26.8",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "postgres": "^3.4.9",
+    "web-tree-sitter": "^0.26.13",
     "tree-sitter-java": "^0.23.5",
     "tree-sitter-typescript": "^0.23.2",
     "@tree-sitter-grammars/tree-sitter-kotlin": "^1.1.0",
@@ -26,6 +26,10 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5.7.0"
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "protobufjs": "^7.6.6",
+    "sharp": "^0.35.5"
   }
 }
